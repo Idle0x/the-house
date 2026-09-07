@@ -66,7 +66,7 @@ def test_banned_row_recalled(app_ctx):
 
 
 def test_landing_route_free():
-    """The app builds and / is free (no x402 gate)."""
+    """The app builds and / + /house/ledger are free (no x402 gate)."""
     from app.x402.seller import build_app
     app = build_app()
     client = TestClient(app)
@@ -75,3 +75,11 @@ def test_landing_route_free():
     body = r.json()
     assert body["service"] == "the-house"
     assert body["memory"] in ("live", "disabled")
+
+    # The money shot: /house/ledger is FREE and returns dedup stats + table.
+    r2 = client.get("/house/ledger")
+    assert r2.status_code == 200
+    ledger_body = r2.json()
+    assert "dedup" in ledger_body
+    assert "callers" in ledger_body
+    assert ledger_body["dedup"]["hits"] == 0

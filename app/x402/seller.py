@@ -27,6 +27,7 @@ from typing import Any, Optional
 from dotenv import load_dotenv
 from fastapi import FastAPI, Request
 
+from core.dedup import DedupEngine, fingerprint
 from core.memory import HouseMemory
 from core.trust import TrustLedger
 
@@ -35,7 +36,7 @@ load_dotenv(Path(__file__).resolve().parents[2] / ".env")
 log = logging.getLogger("the-house.seller")
 
 NETWORK = os.getenv("HOUSE_NETWORK", "eip155:8453")
-BASE_PRICE = os.getenv("HOUSE_BASE_PRICE", "$0.01")
+BASE_PRICE = float(os.getenv("HOUSE_BASE_PRICE", "0.01"))  # USDC list price
 SERVICE_NAME = os.getenv("HOUSE_SERVICE_NAME", "the-house")
 
 
@@ -46,6 +47,10 @@ def _house_wallet() -> str:
     return w
 
 
+def _price_str(usdc: float) -> str:
+    return f"${usdc:.4f}"
+
+
 def extract_payer(payment_payload: Any) -> Optional[str]:
     """Payer address from a settled x402 payload (02-ARCHITECTURE step 1).
 
@@ -54,7 +59,6 @@ def extract_payer(payment_payload: Any) -> Optional[str]:
     """
     if payment_payload is None:
         return None
-    # Bare dict payloads (tests, some middleware versions).
     if isinstance(payment_payload, dict):
         auth = payment_payload.get("authorization") or {}
         if isinstance(auth, dict):
@@ -86,17 +90,8 @@ def extract_payer(payment_payload: Any) -> Optional[str]:
     return None
 
 
-def _caller_row(ledger: TrustLedger, payer: str) -> dict:
-    row = ledger.recall(payer)
-    if row is None:
-        row = ledger.on_first(payer)
-    return row
-
-
 def build_app() -> FastAPI:
     """Build the FastAPI app with x402 payment middleware."""
-    # Imported inside so module import doesn't require the full stack;
-    # serving requires CDP creds + HOUSE_WALLET anyway.
     from x402.http import FacilitatorConfig, HTTPFacilitatorClient
     from x402.http.middleware.fastapi import PaymentMiddlewareASGI
     from x402.http.types import PaymentOption, RouteConfig
@@ -115,9 +110,10 @@ def build_app() -> FastAPI:
     server = x402ResourceServer(facilitator)
     server.register(NETWORK, ExactEvmServerScheme())
 
-    # ---- memory + trust (the whole point) -------------------------------
+    # ---- memory + trust + dedup (the whole point) -----------------------
     memory = HouseMemory()
     ledger = TrustLedger(memory)
+    dedup = DedupEngine(memory)
     log.info("memory: disabled=%s db=%s", memory.disabled(), memory.db_path)
 
     routes: dict[str, RouteConfig] = {
@@ -125,7 +121,7 @@ def build_app() -> FastAPI:
             accepts=PaymentOption(
                 scheme="exact",
                 pay_to=_house_wallet,
-                price=BASE_PRICE,  # base quote; memory decides on the payer
+                price=_price_str(BASE_PRICE),  # base; memory acts on payer
                 network=NETWORK,
                 max_timeout_seconds=600,
             ),
@@ -134,25 +130,12 @@ def build_app() -> FastAPI:
             tags=["intel", "memory", "x402"],
             mime_type="application/json",
         ),
-        "/house/ledger": RouteConfig(
-            accepts=PaymentOption(
-                scheme="exact",
-                pay_to=_house_wallet,
-                price=BASE_PRICE,
-                network=NETWORK,
-                max_timeout_seconds=600,
-            ),
-            description="Your standing with THE HOUSE — trust score, segment, repeats.",
-            service_name=SERVICE_NAME,
-            tags=["ledger", "memory", "x402"],
-            mime_type="application/json",
-        ),
     }
 
     app = FastAPI(title="THE HOUSE", version="0.1.0")
     app.state.memory = memory
     app.state.ledger = ledger
-    app.state.intel_store = {}  # F2 dedup store: route+caller fingerprint → answer
+    app.state.dedup = dedup
 
     # ---- free routes (never gated) ---------------------------------------
     @app.get("/", include_in_schema=False)
@@ -162,63 +145,63 @@ def build_app() -> FastAPI:
             "one_liner": "Every x402 payment is anonymous and stateless. "
                          "The house assumes nothing.",
             "memory": "disabled" if memory.disabled() else "live",
-            "paid": ["/intel/quote", "/house/ledger"],
+            "paid": ["/intel/quote"],
+            "free": ["/house/ledger"],
         }
 
-    # ---- paid handlers (only reachable after x402 settlement) ------------
+    @app.get("/house/ledger", include_in_schema=False)
+    def route_ledger():
+        """Free public money shot: dedup stats + anonymized caller table."""
+        callers = memory.list_entities("caller", limit=200)
+        table = []
+        for row in callers:
+            table.append({
+                "addr": row.get("address", "?"),
+                "segment": row.get("segment"),
+                "trust_score": row.get("trust_score"),
+                "tx_count": row.get("tx_count"),
+                "served": row.get("served_count", 0),
+                "repeats": len(row.get("dedup_fp") or []),
+            })
+        return {
+            "house": SERVICE_NAME,
+            "memory": "disabled" if memory.disabled() else "live",
+            "dedup": dedup.stats(),
+            "callers": table,
+        }
+
+    # ---- paid handler (only reachable after x402 settlement) -------------
     @app.get("/intel/quote")
     def route_intel_quote(request: Request):
         ledger_: TrustLedger = request.app.state.ledger  # type: ignore[attr-defined]
-        store = request.app.state.intel_store  # type: ignore[attr-defined]
-        payer = extract_payer(getattr(request.state, "payment_payload", None))
-
-        if payer is None:
-            return {"error": "payer unknown after settlement"}  # should not happen
-
-        # THE MEMORY ACT — every decision below is a function of the row.
-        row = _caller_row(ledger_, payer)
-        segment = row.get("segment", "new")
-
-        if segment == "banned":
-            # Refuse: no deliverable. (Row stays; caller was charged, house
-            # refunds via E1 audit — the ledger story is refusal on memory.)
-            ledger_.update(payer, "refund")
-            return {"error": "the house declines this wallet", "segment": "banned"}
-
-        # F2 dedup: same intel already bought by THIS caller → serve from
-        # memory, charge $0 (repeat). Fingerprint = fixed quote route.
-        fp = "intel:quote"
-        if fp in (row.get("dedup_fp") or []):
-            ledger_.update(payer, "served", paid_usdc=0.0)
-            # NOTE: full F2 dedup_stats counter lands Day 1 (core/dedup.py).
-            answer = store.get(fp, {
-                "intel": "The house remembers its counterparties. "
-                         "That memory is the price, the refusal, the repeat.",
-            })
-            return {"cached": True, "caller": payer, "standing": row, **answer}
-
-        # First purchase of this intel: charge (already settled), journal,
-        # remember the fingerprint.
-        ledger_.update(payer, "served", paid_usdc=0.0)  # amount stamped at settle
-        answer = {
-            "intel": "The house remembers its counterparties. "
-                     "That memory is the price, the refusal, the repeat.",
-            "offer": "Come back — the second copy is free. Trust compounds.",
-        }
-        store[fp] = answer
-        ledger_.m.upsert_entity("caller", payer, {
-            "dedup_fp": list((row.get("dedup_fp") or []) + [fp]),
-        })
-        return {"cached": False, "caller": payer, "standing": row, **answer}
-
-    @app.get("/house/ledger")
-    def route_ledger(request: Request):
-        ledger_: TrustLedger = request.app.state.ledger  # type: ignore[attr-defined]
+        dedup_: DedupEngine = request.app.state.dedup  # type: ignore[attr-defined]
         payer = extract_payer(getattr(request.state, "payment_payload", None))
         if payer is None:
             return {"error": "payer unknown after settlement"}
-        row = _caller_row(ledger_, payer)
-        return {"caller": payer, "row": row}
+
+        row = ledger_.recall(payer)
+        if row is None:
+            row = ledger_.on_first(payer)
+        if row.get("segment") == "banned":
+            ledger_.update(payer, "refund")
+            return {"error": "the house declines this wallet", "segment": "banned"}
+
+        params: dict[str, Any] = {}
+        fp = fingerprint("/intel/quote", params)
+        answer = {
+            "intel": "The house remembers its counterparties. "
+                     "That memory is the price, the refusal, the repeat.",
+        }
+
+        if dedup_.is_repeat(row, fp):
+            cached = dedup_.load(fp) or answer
+            dedup_.note_repeat(price_usdc=BASE_PRICE)
+            ledger_.update(payer, "served", paid_usdc=0.0)  # $0 repeat
+            return {"cached": True, "caller": payer, "standing": row, **cached}
+
+        ledger_.update(payer, "served", paid_usdc=BASE_PRICE)
+        dedup_.mark_served(row, payer, fp, answer, price_usdc=BASE_PRICE)
+        return {"cached": False, "caller": payer, "standing": row, **answer}
 
     app.add_middleware(PaymentMiddlewareASGI, routes=routes, server=server)
     return app
