@@ -1,0 +1,148 @@
+"""F1 — Counterparty Trust Ledger (Lane A core).
+
+Every pricing/refusal/prepay decision is a pure function of the caller's
+WARM row (kind="caller", name=<wallet address>). No LLM in the hot path.
+
+The deletion harness: with memory disabled, recall() returns None → every
+caller is "new" at list price, no refusal, no prepay, no loyalty. That is
+the hackathon gate, demonstrated.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Optional
+
+from core import config as C
+from core.memory import HouseMemory
+
+
+def clamp(value: float, lo: float, hi: float) -> float:
+    return max(lo, min(hi, value))
+
+
+def compute_segment(row: dict) -> str:
+    """Segment from counters/trust — pure, unit-tested (specs/trust-model.md)."""
+    trust = float(row.get("trust_score", C.NEW_CALLER_TRUST))
+    tx = int(row.get("tx_count", 0))
+    refunds = int(row.get("refund_events", 0))
+    warnings = int(row.get("warning_events", 0))
+    if trust < C.TRUST_FLOOR or refunds >= C.REFUNDS_TO_BAN:
+        return "banned"
+    if trust < C.TRUST_RISKY or warnings >= C.WARNINGS_TO_RISKY:
+        return "risky"
+    if trust >= C.TRUST_VIP_MIN and tx >= C.VIP_MIN_TX:
+        return "vip"
+    if tx >= C.REGULAR_MIN_TX:
+        return "regular"
+    return "new"
+
+
+@dataclass(frozen=True)
+class Decision:
+    """The per-request pricing/allowance verdict."""
+
+    price_mult: float
+    allow: bool
+    segment: str
+    reason: str = ""
+
+    @property
+    def prepay(self) -> bool:
+        return self.allow and self.segment == "risky"
+
+
+class TrustLedger:
+    def __init__(self, m: HouseMemory) -> None:
+        self.m = m
+
+    # ------------------------------------------------------------------ #
+    def recall(self, addr: str) -> Optional[dict]:
+        """Load the caller's WARM row (None = never seen / memory disabled)."""
+        return self.m.get_entity("caller", addr)
+
+    def on_first(self, addr: str) -> dict:
+        """Create the row for a first-time caller."""
+        row = {
+            "address": addr,
+            "first_seen": None,  # set by the request layer (no clock here)
+            "last_seen": None,
+            "tx_count": 0,
+            "total_paid_usdc": 0.0,
+            "served_count": 0,
+            "dedup_hits": 0,
+            "failure_events": 0,
+            "refund_events": 0,
+            "warning_events": 0,
+            "trust_score": C.NEW_CALLER_TRUST,
+            "segment": "new",
+            "dedup_fp": [],
+            "notes": "",
+        }
+        self.m.set_entity("caller", addr, row)
+        return row
+
+    def _ensure(self, addr: str) -> dict:
+        row = self.recall(addr)
+        return row if row is not None else self.on_first(addr)
+
+    # ------------------------------------------------------------------ #
+    def decision(self, addr: str) -> Decision:
+        """Price/allow verdict from the recalled row.
+
+        Memory disabled / unknown caller → "new" at list price (1.00), allowed.
+        banned → refused before serving. risky → allowed but prepay-only.
+        """
+        row = self.recall(addr)
+        if row is None:
+            return Decision(price_mult=1.00, allow=True, segment="new",
+                            reason="first-time or memory-disabled: list price")
+
+        segment = compute_segment(row)
+        mult = C.PRICE_MULT.get(segment)
+        if mult is None:  # banned
+            reason = f"banned: trust {row.get('trust_score')} or refunds {row.get('refund_events')}"
+            return Decision(price_mult=0.0, allow=False, segment="banned",
+                            reason=reason)
+        if segment == "risky":
+            return Decision(price_mult=mult, allow=True, segment="risky",
+                            reason="prepay required (trust < floor or 3 warnings)")
+        return Decision(price_mult=mult, allow=True, segment=segment, reason="")
+
+    # ------------------------------------------------------------------ #
+    def update(self, addr: str, outcome: str, *, paid_usdc: float = 0.0) -> dict:
+        """Apply an outcome to the caller's row. outcome in the KINDS set.
+
+        Served/caller_fault/refund mirror D_SUCCESS / D_CALLER_FAULT /
+        D_REFUND. Returns the updated row.
+        """
+        row = self._ensure(addr)
+        delta = 0.0
+        if outcome == "served":
+            delta = C.D_SUCCESS
+            row["tx_count"] = int(row.get("tx_count", 0)) + 1
+            row["served_count"] = int(row.get("served_count", 0)) + 1
+            row["total_paid_usdc"] = float(row.get("total_paid_usdc", 0.0)) + paid_usdc
+        elif outcome == "caller_fault":
+            delta = C.D_CALLER_FAULT
+            row["warning_events"] = int(row.get("warning_events", 0)) + 1
+            row["failure_events"] = int(row.get("failure_events", 0)) + 1
+        elif outcome == "refund":
+            delta = C.D_REFUND
+            row["refund_events"] = int(row.get("refund_events", 0)) + 1
+        else:
+            raise ValueError(f"unknown outcome {outcome!r}")
+
+        row["trust_score"] = clamp(
+            float(row.get("trust_score", C.NEW_CALLER_TRUST)) + delta, 0.0, 100.0
+        )
+        row["segment"] = compute_segment(row)
+        row["last_seen"] = None  # request layer stamps real time
+        self.m.set_entity("caller", addr, row)
+        self.m.write_event(f"{addr} {outcome} (Δ{delta:+d})", kind=outcome)
+        return row
+
+    # ------------------------------------------------------------------ #
+    def refuse_reason(self, addr: str) -> str:
+        d = self.decision(addr)
+        return d.reason if not d.allow else ""
