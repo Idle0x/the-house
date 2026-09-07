@@ -1,0 +1,20 @@
+[project]
+name = "the-house"
+version = "0.1.0"
+description = "THE HOUSE — a memory-native x402 service on Base. Prices, serves, and retries financial work based on what it remembers about each counterparty."
+requires-python = ">=3.11"
+dependencies = [
+    "sibyl-memory-client==0.7.0",
+    "fastapi>=0.141",
+    "uvicorn[standard]>=0.52",
+    "httpx>=0.28",
+    "web3>=8.0",
+    "eth-account>=0.14",
+    "x402>=0.4",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=9.1"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
