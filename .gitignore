@@ -1,0 +1,37 @@
+# --- environment & secrets ---
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# --- internal planning (NOT part of the public submission repo) ---
+/shared/
+
+# --- python ---
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# --- house runtime state ---
+data/
+cache/
+*.db
+*.sqlite
+*.sqlite3
+
+# --- node (ACP CLI scratch, if any) ---
+node_modules/
+
+# --- os / editor ---
+.DS_Store
+*.swp
+.idea/
+.vscode/
