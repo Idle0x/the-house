@@ -10,6 +10,7 @@ the hackathon gate, demonstrated.
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass
 from typing import Optional
 
@@ -65,8 +66,8 @@ class TrustLedger:
         """Create the row for a first-time caller."""
         row = {
             "address": addr,
-            "first_seen": None,  # set by the request layer (no clock here)
-            "last_seen": None,
+            "first_seen": time.time(),
+            "last_seen": time.time(),
             "tx_count": 0,
             "total_paid_usdc": 0.0,
             "served_count": 0,
@@ -137,9 +138,23 @@ class TrustLedger:
             float(row.get("trust_score", C.NEW_CALLER_TRUST)) + delta, 0.0, 100.0
         )
         row["segment"] = compute_segment(row)
-        row["last_seen"] = None  # request layer stamps real time
+        row["last_seen"] = time.time()
         self.m.set_entity("caller", addr, row)
         self.m.write_event(f"{addr} {outcome} (Δ{delta:+d})", kind=outcome)
+        return row
+
+    # ------------------------------------------------------------------ #
+    def note_dedup(self, addr: str) -> dict:
+        """Increment the per-caller dedup_hits counter (F2 money beat).
+
+        Separate from the global dedup_stats state: this keeps the caller
+        row's own story accurate (the schema always carried dedup_hits but
+        nothing wrote it — H2 fix).
+        """
+        row = self._ensure(addr)
+        row["dedup_hits"] = int(row.get("dedup_hits", 0)) + 1
+        row["last_seen"] = time.time()
+        self.m.set_entity("caller", addr, row)
         return row
 
     # ------------------------------------------------------------------ #

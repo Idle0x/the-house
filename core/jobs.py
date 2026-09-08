@@ -25,6 +25,8 @@ from core.memory import HouseMemory
 
 PHASES = ("accepted", "serving", "verified", "settled", "refunded", "failed")
 PAYMENT_STATES = ("pending", "verified", "settled", "refunded")
+# Terminal phases: resume_all/pending_count/snapshot must ignore these.
+TERMINAL = ("settled", "refunded", "failed")
 
 
 def job_id(caller: str, route: str, fp: str, attempt: int) -> str:
@@ -124,9 +126,17 @@ class JobStateMachine:
         return self.advance(job_id_, "refunded", payment_state="refunded")
 
     def fail(self, job_id_: str, cause: str) -> dict:
+        """Mark the job FAILED (terminal), then open attempt N+1.
+
+        Persist the failed state BEFORE the retry side effect, so a crash
+        between the two never leaves the original non-terminal (a zombie
+        resume_all would double-serve). The retry is a NEW job row with its
+        own id — resume_all will only ever see the live retry.
+        """
         job = self.get(job_id_)
         if job is None:
             raise KeyError(f"no such job {job_id_}")
+        self.advance(job_id_, "failed", step=f"failed: {cause}")
         attempt = int(job.get("attempt", 1)) + 1
         return self.start(job["caller"], job["route"], job["fp"],
                           attempt=attempt, params=job.get("params"))
@@ -135,17 +145,16 @@ class JobStateMachine:
     def resume_all(self) -> list[dict]:
         """On startup: continue every non-terminal job from its last phase.
 
-        Terminal = settled / refunded / failed-after-retry-exhausted.
+        Terminal = settled / refunded / failed (failed jobs have a live
+        retry row of their own — never resurrect the corpse).
         Returns the list of resumed (non-terminal) jobs.
         """
         resumed = []
         jobs = self._jobs()
         for jid, job in jobs.items():
-            phase = job.get("phase")
-            if phase in ("settled", "refunded"):
+            if job.get("phase") in TERMINAL:
                 continue
             # Persist the resumed marker BEFORE re-running the step.
-            job["phase"] = phase  # unchanged but refreshed
             job["resumed_at"] = time.time()
             jobs[jid] = job
             resumed.append(job)
@@ -156,13 +165,13 @@ class JobStateMachine:
     def pending_count(self) -> int:
         jobs = self._jobs()
         return sum(1 for j in jobs.values()
-                   if j.get("phase") not in ("settled", "refunded"))
+                   if j.get("phase") not in TERMINAL)
 
     def snapshot(self, limit: int = 50) -> list[dict]:
         """Non-terminal jobs first, then most recently updated — for /house/jobs."""
         jobs = self._jobs()
         ordered = sorted(jobs.values(),
                          key=lambda j: float(j.get("updated_at", 0)), reverse=True)
-        ordered.sort(key=lambda j: 0 if j.get("phase") not in ("settled", "refunded")
+        ordered.sort(key=lambda j: 0 if j.get("phase") not in TERMINAL
                      else 1)
         return ordered[:limit]

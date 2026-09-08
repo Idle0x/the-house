@@ -27,6 +27,7 @@ from typing import Any, Optional
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
 
 from core.audit import SelfAuditor
 from core.calibrate import Calibrator
@@ -206,7 +207,8 @@ def build_app() -> FastAPI:
                 "trust_score": row.get("trust_score"),
                 "tx_count": row.get("tx_count"),
                 "served": row.get("served_count", 0),
-                "repeats": len(row.get("dedup_fp") or []),
+                "dedup_hits": row.get("dedup_hits", 0),
+                "fps": len(row.get("dedup_fp") or []),
             })
         return {
             "house": SERVICE_NAME,
@@ -290,11 +292,20 @@ def build_app() -> FastAPI:
             if row is None:
                 row = ledger_.on_first(payer)
             if row.get("segment") == "banned":
-                ledger_.update(payer, "refund")
+                # Refusal MUST be a >=400 response: the x402 middleware
+                # cancels settlement on error statuses, so a refused wallet
+                # is never charged. Do NOT book a ledger "refund" — no money
+                # moved; a fake refund event would corrupt the money story.
+                reason = ledger_.refuse_reason(payer) or "banned wallet"
                 if jid:
-                    jobs_.refund(jid, reason="banned wallet")
-                return {"error": "the house declines this wallet",
-                        "segment": "banned", "house": {"segment": "banned"}}
+                    jobs_.refund(jid, reason="banned refusal (settlement cancelled)")
+                return JSONResponse(
+                    status_code=403,
+                    content={"error": "the house declines this wallet",
+                             "house_refused": reason,
+                             "segment": "banned",
+                             "house": {"segment": "banned"}},
+                )
 
             answer = {
                 "intel": "The house remembers its counterparties. "
@@ -304,15 +315,16 @@ def build_app() -> FastAPI:
             if dedup_.is_repeat(row, fp):
                 cached = dedup_.load(fp) or answer
                 dedup_.note_repeat(price_usdc=BASE_PRICE)
-                ledger_.update(payer, "served", paid_usdc=0.0)  # $0 repeat
+                updated = ledger_.update(payer, "served", paid_usdc=0.0)  # $0 repeat
+                updated = ledger_.note_dedup(payer)  # per-caller counter (H2)
                 if jid:
                     # Same deterministic job id as the first serve — settle
                     # idempotently so no non-terminal row survives (the
                     # original settlement already happened on serve #1).
                     jobs_.settle(jid, payer)
-                return {"cached": True, "caller": payer, "standing": row,
-                        "house": {"segment": row.get("segment"),
-                                  "trust_score": row.get("trust_score"),
+                return {"cached": True, "caller": payer, "standing": updated,
+                        "house": {"segment": updated.get("segment"),
+                                  "trust_score": updated.get("trust_score"),
                                   "repeat_of": fp},
                         **cached}
 
@@ -320,29 +332,37 @@ def build_app() -> FastAPI:
                 jobs_.advance(jid, "serving", step="serve", payment_state="verified")
             ledger_.update(payer, "served", paid_usdc=BASE_PRICE)
             dedup_.mark_served(row, payer, fp, answer, price_usdc=BASE_PRICE)
+            # Re-read so standing reflects EVERY write in this request
+            # (trust bump + fingerprint append) — the demo's on-screen state.
+            final_row = ledger_.recall(payer) or row
             if jid:
                 jobs_.settle(jid, payer)  # idempotent — the double-charge killer
-            return {"cached": False, "caller": payer, "standing": row,
-                    "house": {"segment": row.get("segment"),
-                              "trust_score": row.get("trust_score")},
+            return {"cached": False, "caller": payer, "standing": final_row,
+                    "house": {"segment": final_row.get("segment"),
+                              "trust_score": final_row.get("trust_score")},
                     **answer}
         except Exception as exc:  # noqa: BLE001 - F3: serve failure → scar
             # A paid serve that failed is the house's OWN failure — record a
             # scar (F3). We do NOT dock the caller's trust for a house-side
             # fault (that would corrupt the ledger's meaning); the job is
-            # failed/refundable and the next session hardens via policy.
+            # marked failed-terminal (no auto-retry — there is no executor
+            # driving attempt 2; the scar/policy is the hardening path) and
+            # the next session hardens via policy.
             failure_class = _failure_class(exc)
             scar_id: Optional[str] = None
             if live:
                 try:
                     scar_id = scars_.record("/intel/quote", failure_class, str(exc))
                     if jid:
-                        jobs_.fail(jid, cause=f"{failure_class}: {exc}")
+                        try:
+                            jobs_.advance(jid, "failed",
+                                          step=f"serve failed: {failure_class}")
+                        except Exception:  # noqa: BLE001
+                            log.exception("job terminal-fail failed")
                 except Exception:  # noqa: BLE001
                     log.exception("scar recording failed")
             log.warning("serve failed payer=%s class=%s scar=%s",
                         payer, failure_class, scar_id)
-            from fastapi.responses import JSONResponse
             return JSONResponse(
                 status_code=502,
                 content={"error": "serve failed", "failure_class": failure_class,

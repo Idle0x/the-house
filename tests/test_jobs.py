@@ -10,7 +10,7 @@ import uuid
 
 import pytest
 
-from core.jobs import JobStateMachine, job_id
+from core.jobs import TERMINAL, JobStateMachine, job_id
 from core.memory import HouseMemory
 
 CALLER = "0x" + "F" * 40
@@ -77,6 +77,29 @@ def test_fail_creates_new_attempt():
     assert retry["id"] != jid
     # Original stays failed-able; retry is a fresh job row.
     assert sm.get(retry["id"])["attempt"] == 2
+
+
+def test_failed_original_is_terminal_no_zombie():
+    """C4 fix: fail() marks the original job FAILED (terminal) so
+    resume_all never resurrects a failed attempt alongside its retry."""
+    db = f"/tmp/house_f4_zombie_{uuid.uuid4().hex}.db"
+    m, sm = _mk(db)
+    job = sm.start(CALLER, ROUTE, FP)
+    jid = job["id"]
+    sm.advance(jid, "serving", step="fetch", payment_state="verified")
+    retry = sm.fail(jid, "upstream 5xx")
+
+    # Original is terminal (failed), NOT serving anymore.
+    orig = sm.get(jid)
+    assert orig is not None and orig["phase"] == "failed"
+    assert orig["phase"] in TERMINAL
+    # pending_count counts only the live retry, not the corpse.
+    assert sm.pending_count() == 1
+    # resume_all on restart must NOT resurrect the failed original.
+    resumed = sm.resume_all()
+    resumed_ids = {j["id"] for j in resumed}
+    assert jid not in resumed_ids
+    assert retry["id"] in resumed_ids
 
 
 def test_deletion_f4():
