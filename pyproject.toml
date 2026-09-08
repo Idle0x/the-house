@@ -10,7 +10,15 @@ dependencies = [
     "httpx>=0.28",
     "web3>=8.0",
     "eth-account>=0.14",
-    "x402>=0.4",
+    # x402 2.x is REQUIRED — the seller uses the 2.x Exact-scheme CDP
+    # facilitator API (x402==0.4.x has a different, incompatible API).
+    "x402==2.22.0",
+    # CDP facilitator for the x402 Exact scheme on Base (provides the
+    # `cdp.x402` import). NEVER install bare `cdp` — that is a 0.0.2
+    # typosquat. cdp-sdk 1.48.1 is the real one.
+    "cdp-sdk==1.48.1",
+    # loads .env (CDP_API_KEY_ID/SECRET, HOUSE_WALLET, ...) at startup.
+    "python-dotenv>=1.2",
 ]
 
 [project.optional-dependencies]
