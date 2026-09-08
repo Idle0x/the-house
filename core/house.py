@@ -48,6 +48,7 @@ from core.scars import ScarCompiler
 from core.settle_journal import SettlementJournal
 from core.trust import TrustLedger
 from core.wallet import DryRunWallet, HouseWallet, USDC_BASE
+from core.watch import Watchtower
 
 log = logging.getLogger("the-house.engine")
 
@@ -77,7 +78,8 @@ class House:
                  wallet: Optional[HouseWallet] = None,
                  do_work: Optional[Callable[[str], dict[str, Any]]] = None,
                  wallet_check: Optional[Callable[[], dict]] = None,
-                 service_name: str = "the-house") -> None:
+                 service_name: str = "the-house",
+                 watch: Optional[Watchtower] = None) -> None:
         self.m = memory
         self.base_price = base_price
         self.service_name = service_name
@@ -94,6 +96,7 @@ class House:
         self.journal = SettlementJournal(memory)
         self._do_work = do_work if do_work is not None else self._default_work
         self._wallet_check = wallet_check
+        self.watch = watch
         self._executor: Optional[JobExecutor] = None
 
     # ------------------------------------------------------------------ #
@@ -185,6 +188,15 @@ class House:
                          "house_refused": reason, "segment": "banned",
                          "house_declined": True,
                          "house": {"segment": "banned"}}
+
+        # ---- Room 4: the watchtower — the house refuses to launder -------
+        # A caller the tower calls ABORT (self-pay, funding-cluster sybil,
+        # factory) is refused BEFORE settlement → genuinely uncharged, and
+        # the refusal + ring are published on the verdict feed.
+        if self.watch is not None:
+            refusal = self.watch.consult(payer)
+            if refusal is not None:
+                return 403, refusal
 
         # ---- FIX-2: scar policy cite (consult compiled policy on read) ---
         scar_cited = None

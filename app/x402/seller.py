@@ -41,11 +41,12 @@ from fastapi.responses import HTMLResponse, JSONResponse, Response
 
 from app.x402.landing import render_landing
 from core.bonds import UnderwritingDesk
-from core.config import BOND_BASE_PREMIUM
+from core.config import BOND_BASE_PREMIUM, WATCH_SCREEN_PRICE
 from core.house import House
 from core.memory import HouseMemory
 from core.settle_journal import decode_settlement_header
 from core.wallet import HouseWallet, USDC_BASE
+from core.watch import Watchtower
 
 load_dotenv(Path(__file__).resolve().parents[2] / ".env")
 
@@ -293,9 +294,14 @@ def build_app() -> FastAPI:
         log.info("money-out: DRY-RUN (no acp, no money) — set "
                  "HOUSE_LIVE_MONEY_OUT=1 to enable real rebates")
 
+    # Room 4: the watchtower — deterministic screens over the house's own
+    # observed caller set. It guards the serve path (refuse to launder) and
+    # sells standalone screens on /watch/screen.
+    watch = Watchtower(memory, house_wallet=_house_wallet())
     house = House(memory, base_price=BASE_PRICE, service_name=SERVICE_NAME,
                   wallet=wallet_obj,
-                  wallet_check=_acp_wallet_check if live_money_out else None)
+                  wallet_check=_acp_wallet_check if live_money_out else None,
+                  watch=watch)
     log.info("memory: disabled=%s db=%s", memory.disabled(), memory.db_path)
 
     # ---- room 2: the underwriting desk (bonds) --------------------------
@@ -340,6 +346,23 @@ def build_app() -> FastAPI:
             tags=["bonds", "underwriting", "x402"],
             mime_type="application/json",
         ),
+        # Room 4: the watchtower — a screen is a memory read with a money
+        # consequence: the house forgoes dirty revenue on its own serve path
+        # and sells its verdicts here. Deterministic; no ML, no census.
+        "POST /watch/screen": RouteConfig(
+            accepts=PaymentOption(
+                scheme="exact",
+                pay_to=_house_wallet(),
+                price=WATCH_SCREEN_PRICE,
+                network=NETWORK,
+                max_timeout_seconds=600,
+            ),
+            description="Counterparty screen from the house's remembered "
+                        "caller set: CLEAR / HOLD / ABORT + the evidence.",
+            service_name=SERVICE_NAME,
+            tags=["watchtower", "integrity", "x402"],
+            mime_type="application/json",
+        ),
     }
 
     app = FastAPI(title="THE HOUSE", version="0.2.0", lifespan=lifespan)
@@ -356,6 +379,7 @@ def build_app() -> FastAPI:
     app.state.wallet = house.wallet
     app.state.journal = house.journal
     app.state.desk = desk
+    app.state.watch = watch
 
     # ---- free routes (never gated) ---------------------------------------
     @app.get("/manifest", include_in_schema=False)
@@ -368,9 +392,9 @@ def build_app() -> FastAPI:
             "one_liner": "Every x402 payment is anonymous and stateless. "
                          "The house assumes nothing.",
             "memory": "disabled" if memory.disabled() else "live",
-            "paid": ["/intel/quote", "POST /bond/quote"],
+            "paid": ["/intel/quote", "POST /bond/quote", "POST /watch/screen"],
             "free": ["/house/ledger", "/house/jobs", "/house/audit",
-                     "/house/calibrate", "/house/bonds"],
+                     "/house/calibrate", "/house/bonds", "/house/watch"],
             "money": {
                 "settlements": house.journal.count(),
                 "settled_usdc": house.journal.total_usdc(),
@@ -486,6 +510,15 @@ def build_app() -> FastAPI:
         reg = desk.register()
         return {"house": SERVICE_NAME, **reg}
 
+    @app.get("/house/watch", include_in_schema=False)
+    def route_watch():
+        """Room 4's public face: the verdict feed (recent screens + refusals
+        with reasons) and the aggregate organic-vs-manufactured readout of the
+        house's own observed traffic."""
+        return {"house": SERVICE_NAME,
+                "stats": watch.stats(),
+                "feed": watch.feed()}
+
     # ---- paid handler (only reachable after x402 verification) ------------
     @app.post("/bond/quote")
     async def route_bond_quote(request: Request):
@@ -532,6 +565,24 @@ def build_app() -> FastAPI:
         return {**issued, "rebate_tx": rebate_tx,
                 "net_premium_usdc": round(
                     desk.base_premium * quote["mult"], 6)}
+
+    # ---- paid handler (only reachable after x402 verification) ------------
+    @app.post("/watch/screen")
+    async def route_watch_screen(request: Request):
+        """Room 4: sell a counterparty screen. Paid (screen price quoted
+        onchain). The screen itself is a deterministic memory read — CLEAR /
+        HOLD / ABORT + the evidence (self-pay, funding-cluster sybil, factory
+        fingerprint, cold-start volume, metronome timing)."""
+        body = await request.json()
+        wallet = str(body.get("wallet", "")).strip()
+        if not wallet:
+            return JSONResponse(status_code=400,
+                                 content={"error": "wallet required"})
+        payer = extract_payer(getattr(request.state, "payment_payload", None))
+        if payer is None:
+            return JSONResponse(status_code=502,
+                                 content={"error": "payer unknown after settlement"})
+        return {"house": SERVICE_NAME, **watch.screen(wallet)}
 
     # ---- paid handler (only reachable after x402 verification) ------------
     @app.get("/intel/quote")
