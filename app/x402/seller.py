@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import logging
 import os
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, Optional
 
@@ -28,7 +29,9 @@ from dotenv import load_dotenv
 from fastapi import FastAPI, Request
 
 from core.dedup import DedupEngine, fingerprint
+from core.jobs import JobStateMachine
 from core.memory import HouseMemory
+from core.scars import ScarCompiler
 from core.trust import TrustLedger
 
 load_dotenv(Path(__file__).resolve().parents[2] / ".env")
@@ -90,6 +93,33 @@ def extract_payer(payment_payload: Any) -> Optional[str]:
     return None
 
 
+def _failure_class(exc: BaseException) -> str:
+    """Stable failure_class string for scar recording (03-FEATURES F3)."""
+    name = type(exc).__name__
+    msg = str(exc).lower()
+    if "timeout" in msg or "timed out" in msg:
+        return "5xx upstream timeout"
+    if "connection" in msg or "refused" in msg:
+        return "upstream connection refused"
+    return f"exception:{name}"
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """F4: on startup, resume every non-terminal job (kill -9 → wake up, finish).
+
+    Under SIBYL_DISABLED the null memory holds no jobs — resume is a no-op
+    (the deletion degradation: idempotency died with the memory).
+    """
+    jobs_: JobStateMachine = app.state.jobs  # type: ignore[attr-defined]
+    resumed = jobs_.resume_all()
+    if resumed:
+        log.info("resume_all: %d in-flight job(s) picked up", len(resumed))
+    else:
+        log.info("resume_all: no in-flight jobs to resume")
+    yield
+
+
 def build_app() -> FastAPI:
     """Build the FastAPI app with x402 payment middleware."""
     from x402.http import FacilitatorConfig, HTTPFacilitatorClient
@@ -110,7 +140,7 @@ def build_app() -> FastAPI:
     server = x402ResourceServer(facilitator)
     server.register(NETWORK, ExactEvmServerScheme())
 
-    # ---- memory + trust + dedup (the whole point) -----------------------
+    # ---- memory + trust + dedup + scars + jobs (the whole point) ---------
     # Isolated house DB (gitignored data/) — not the shared ~/.sibyl default,
     # so the live ledger tells the house's own story.
     db_path = os.getenv("HOUSE_MEMORY_DB",
@@ -118,6 +148,8 @@ def build_app() -> FastAPI:
     memory = HouseMemory(db_path)
     ledger = TrustLedger(memory)
     dedup = DedupEngine(memory)
+    scars = ScarCompiler(memory)
+    jobs = JobStateMachine(memory)
     log.info("memory: disabled=%s db=%s", memory.disabled(), memory.db_path)
 
     routes: dict[str, RouteConfig] = {
@@ -136,10 +168,12 @@ def build_app() -> FastAPI:
         ),
     }
 
-    app = FastAPI(title="THE HOUSE", version="0.1.0")
+    app = FastAPI(title="THE HOUSE", version="0.1.0", lifespan=lifespan)
     app.state.memory = memory
     app.state.ledger = ledger
     app.state.dedup = dedup
+    app.state.scars = scars
+    app.state.jobs = jobs
 
     # ---- free routes (never gated) ---------------------------------------
     @app.get("/", include_in_schema=False)
@@ -172,40 +206,128 @@ def build_app() -> FastAPI:
             "memory": "disabled" if memory.disabled() else "live",
             "dedup": dedup.stats(),
             "callers": table,
+            "scars": {"total": len(memory.list_entities("scar", limit=500)),
+                      "rules": len(scars.active_rules())},
+            "jobs": {"pending": jobs.pending_count()},
+        }
+
+    @app.get("/house/jobs", include_in_schema=False)
+    def route_jobs():
+        """Free live view of F4 job state machines (the kill-resume surface)."""
+        return {
+            "house": SERVICE_NAME,
+            "memory": "disabled" if memory.disabled() else "live",
+            "pending": jobs.pending_count(),
+            "jobs": jobs.snapshot(limit=50),
+        }
+
+    @app.post("/house/compile", include_in_schema=False)
+    def route_compile():
+        """Free on-demand F3 scar compile (demo trigger; also run on timer).
+
+        Groups same (route, failure_class) scars into REFERENCE policy rules
+        and returns the rules created this pass.
+        """
+        created = scars.compile()
+        return {
+            "house": SERVICE_NAME,
+            "memory": "disabled" if memory.disabled() else "live",
+            "rules_created": created,
+            "active_rules": {rid: r for rid, r in scars.active_rules().items()},
+            "scar_total": len(memory.list_entities("scar", limit=500)),
         }
 
     # ---- paid handler (only reachable after x402 settlement) -------------
     @app.get("/intel/quote")
     def route_intel_quote(request: Request):
+        memory_: HouseMemory = request.app.state.memory  # type: ignore[attr-defined]
         ledger_: TrustLedger = request.app.state.ledger  # type: ignore[attr-defined]
         dedup_: DedupEngine = request.app.state.dedup  # type: ignore[attr-defined]
+        scars_: ScarCompiler = request.app.state.scars  # type: ignore[attr-defined]
+        jobs_: JobStateMachine = request.app.state.jobs  # type: ignore[attr-defined]
         payer = extract_payer(getattr(request.state, "payment_payload", None))
         if payer is None:
             return {"error": "payer unknown after settlement"}
 
-        row = ledger_.recall(payer)
-        if row is None:
-            row = ledger_.on_first(payer)
-        if row.get("segment") == "banned":
-            ledger_.update(payer, "refund")
-            return {"error": "the house declines this wallet", "segment": "banned"}
-
+        live = not memory_.disabled()
         params: dict[str, Any] = {}
         fp = fingerprint("/intel/quote", params)
-        answer = {
-            "intel": "The house remembers its counterparties. "
-                     "That memory is the price, the refusal, the repeat.",
-        }
 
-        if dedup_.is_repeat(row, fp):
-            cached = dedup_.load(fp) or answer
-            dedup_.note_repeat(price_usdc=BASE_PRICE)
-            ledger_.update(payer, "served", paid_usdc=0.0)  # $0 repeat
-            return {"cached": True, "caller": payer, "standing": row, **cached}
+        # F4 (02-ARCHITECTURE §4 step 2): persist the job BEFORE the memory
+        # act, so a kill -9 mid-request resumes instead of double-serving.
+        # Under SIBYL_DISABLED there is no job state to persist — the handler
+        # degrades to list-price serve (the deletion demo).
+        jid: Optional[str] = None
+        if live:
+            try:
+                jid = jobs_.start(payer, "/intel/quote", fp, params=params)["id"]
+            except Exception:  # noqa: BLE001 - never let job bookkeeping kill a paid serve
+                log.exception("job start failed (continuing serve)")
+                jid = None
 
-        ledger_.update(payer, "served", paid_usdc=BASE_PRICE)
-        dedup_.mark_served(row, payer, fp, answer, price_usdc=BASE_PRICE)
-        return {"cached": False, "caller": payer, "standing": row, **answer}
+        try:
+            row = ledger_.recall(payer)
+            if row is None:
+                row = ledger_.on_first(payer)
+            if row.get("segment") == "banned":
+                ledger_.update(payer, "refund")
+                if jid:
+                    jobs_.refund(jid, reason="banned wallet")
+                return {"error": "the house declines this wallet",
+                        "segment": "banned", "house": {"segment": "banned"}}
+
+            answer = {
+                "intel": "The house remembers its counterparties. "
+                         "That memory is the price, the refusal, the repeat.",
+            }
+
+            if dedup_.is_repeat(row, fp):
+                cached = dedup_.load(fp) or answer
+                dedup_.note_repeat(price_usdc=BASE_PRICE)
+                ledger_.update(payer, "served", paid_usdc=0.0)  # $0 repeat
+                if jid:
+                    # Same deterministic job id as the first serve — settle
+                    # idempotently so no non-terminal row survives (the
+                    # original settlement already happened on serve #1).
+                    jobs_.settle(jid, payer)
+                return {"cached": True, "caller": payer, "standing": row,
+                        "house": {"segment": row.get("segment"),
+                                  "trust_score": row.get("trust_score"),
+                                  "repeat_of": fp},
+                        **cached}
+
+            if jid:
+                jobs_.advance(jid, "serving", step="serve", payment_state="verified")
+            ledger_.update(payer, "served", paid_usdc=BASE_PRICE)
+            dedup_.mark_served(row, payer, fp, answer, price_usdc=BASE_PRICE)
+            if jid:
+                jobs_.settle(jid, payer)  # idempotent — the double-charge killer
+            return {"cached": False, "caller": payer, "standing": row,
+                    "house": {"segment": row.get("segment"),
+                              "trust_score": row.get("trust_score")},
+                    **answer}
+        except Exception as exc:  # noqa: BLE001 - F3: serve failure → scar
+            # A paid serve that failed is the house's OWN failure — record a
+            # scar (F3). We do NOT dock the caller's trust for a house-side
+            # fault (that would corrupt the ledger's meaning); the job is
+            # failed/refundable and the next session hardens via policy.
+            failure_class = _failure_class(exc)
+            scar_id: Optional[str] = None
+            if live:
+                try:
+                    scar_id = scars_.record("/intel/quote", failure_class, str(exc))
+                    if jid:
+                        jobs_.fail(jid, cause=f"{failure_class}: {exc}")
+                except Exception:  # noqa: BLE001
+                    log.exception("scar recording failed")
+            log.warning("serve failed payer=%s class=%s scar=%s",
+                        payer, failure_class, scar_id)
+            from fastapi.responses import JSONResponse
+            return JSONResponse(
+                status_code=502,
+                content={"error": "serve failed", "failure_class": failure_class,
+                         "scar_id": scar_id},
+            )
 
     app.add_middleware(PaymentMiddlewareASGI, routes=routes, server=server)
     return app

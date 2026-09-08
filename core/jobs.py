@@ -157,3 +157,12 @@ class JobStateMachine:
         jobs = self._jobs()
         return sum(1 for j in jobs.values()
                    if j.get("phase") not in ("settled", "refunded"))
+
+    def snapshot(self, limit: int = 50) -> list[dict]:
+        """Non-terminal jobs first, then most recently updated — for /house/jobs."""
+        jobs = self._jobs()
+        ordered = sorted(jobs.values(),
+                         key=lambda j: float(j.get("updated_at", 0)), reverse=True)
+        ordered.sort(key=lambda j: 0 if j.get("phase") not in ("settled", "refunded")
+                     else 1)
+        return ordered[:limit]
