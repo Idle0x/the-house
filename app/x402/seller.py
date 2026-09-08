@@ -40,6 +40,8 @@ from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse, Response
 
 from app.x402.landing import render_landing
+from core.bonds import UnderwritingDesk
+from core.config import BOND_BASE_PREMIUM
 from core.house import House
 from core.memory import HouseMemory
 from core.settle_journal import decode_settlement_header
@@ -296,6 +298,14 @@ def build_app() -> FastAPI:
                   wallet_check=_acp_wallet_check if live_money_out else None)
     log.info("memory: disabled=%s db=%s", memory.disabled(), memory.db_path)
 
+    # ---- room 2: the underwriting desk (bonds) --------------------------
+    # Shares the house's memory and money-out wallet (same safe-by-default
+    # policy: DryRun unless live money-out is enabled), so a claim payout is
+    # a real onchain tx from the house wallet exactly like a rebate.
+    desk = UnderwritingDesk(memory, wallet=wallet_obj)
+    log.info("underwriting desk: face=$%.2f base_premium=$%.4f",
+             desk.face, desk.base_premium)
+
     routes: dict[str, RouteConfig] = {
         "/intel/quote": RouteConfig(
             accepts=PaymentOption(
@@ -308,6 +318,26 @@ def build_app() -> FastAPI:
             description="A short intel brief. I remember who you are.",
             service_name=SERVICE_NAME,
             tags=["intel", "memory", "x402"],
+            mime_type="application/json",
+        ),
+        # Room 2: the underwriting desk. x402 route keys support a verb
+        # prefix ("POST /path" — verified in x402 _parse_route_pattern), so
+        # this gates POST specifically. The onchain quote is the BASE bond
+        # premium; memory only discounts (proven → rebate back) or refuses
+        # (risky → 403, settlement cancelled, uncharged).
+        "POST /bond/quote": RouteConfig(
+            accepts=PaymentOption(
+                scheme="exact",
+                pay_to=_house_wallet(),
+                price=BOND_BASE_PREMIUM,
+                network=NETWORK,
+                max_timeout_seconds=600,
+            ),
+            description=("Underwrite a provider: a bond that the house pays "
+                         "out of its own wallet if the provider fails. "
+                         "Priced from what the house remembers."),
+            service_name=SERVICE_NAME,
+            tags=["bonds", "underwriting", "x402"],
             mime_type="application/json",
         ),
     }
@@ -325,6 +355,7 @@ def build_app() -> FastAPI:
     app.state.calibrator = house.calibrator
     app.state.wallet = house.wallet
     app.state.journal = house.journal
+    app.state.desk = desk
 
     # ---- free routes (never gated) ---------------------------------------
     @app.get("/manifest", include_in_schema=False)
@@ -337,9 +368,9 @@ def build_app() -> FastAPI:
             "one_liner": "Every x402 payment is anonymous and stateless. "
                          "The house assumes nothing.",
             "memory": "disabled" if memory.disabled() else "live",
-            "paid": ["/intel/quote"],
+            "paid": ["/intel/quote", "POST /bond/quote"],
             "free": ["/house/ledger", "/house/jobs", "/house/audit",
-                     "/house/calibrate"],
+                     "/house/calibrate", "/house/bonds"],
             "money": {
                 "settlements": house.journal.count(),
                 "settled_usdc": house.journal.total_usdc(),
@@ -447,6 +478,60 @@ def build_app() -> FastAPI:
     @app.get("/house/calibrate", include_in_schema=False)
     def route_calibrate():
         return {"house": SERVICE_NAME, **house.calibrator.calibrate()}
+
+    @app.get("/house/bonds", include_in_schema=False)
+    def route_bonds():
+        """Room 2's public register: every bond, premium, claim, payout tx.
+        Addresses anonymized to last-6 (the register is public)."""
+        reg = desk.register()
+        return {"house": SERVICE_NAME, **reg}
+
+    # ---- paid handler (only reachable after x402 verification) ------------
+    @app.post("/bond/quote")
+    async def route_bond_quote(request: Request):
+        """Room 2: underwrite a provider. Paid (base premium quoted onchain).
+
+        Memory acts before settlement:
+          * proven provider  → bond issued at the discounted premium; the
+            discount is rebated back as a real tx (net = premium×mult)
+          * unknown/standard → bond issued at the flat base premium
+          * risky provider   → 403 BEFORE settlement (the house refuses;
+            the buyer is genuinely uncharged)
+          * over the remembered exposure cap → 403, uncharged
+        """
+        body = await request.json()
+        provider = str(body.get("provider", "")).strip()
+        if not provider:
+            return JSONResponse(status_code=400,
+                                 content={"error": "provider address required"})
+        payer = extract_payer(getattr(request.state, "payment_payload", None))
+        if payer is None:
+            # A verified payment with no recoverable payer is a server
+            # failure (5xx cancels settlement — the buyer is not charged).
+            return JSONResponse(status_code=502,
+                                 content={"error": "payer unknown after settlement"})
+        quote = desk.premium_quote(provider)
+        if quote["segment"] == "risky":
+            return JSONResponse(status_code=403, content={
+                "error": "the house will not bond this provider",
+                "provider_last6": provider[-6:],
+                "segment": "risky",
+                "evidence": quote["evidence"],
+                "uncharged": True,
+            })
+        status, issued = desk.issue(provider, payer, premium=quote["premium"])
+        if status >= 400:
+            return JSONResponse(status_code=status,
+                                 content={**issued, "uncharged": True})
+        # Memory acts on a proven buyer: settle the base premium onchain,
+        # rebate back (base − premium) as a real tx. Net = premium.
+        rebate_tx = None
+        if quote["mult"] < 1.0:
+            rebate_tx = desk.wallet.send_rebate(
+                payer, desk.base_premium, quote["mult"])
+        return {**issued, "rebate_tx": rebate_tx,
+                "net_premium_usdc": round(
+                    desk.base_premium * quote["mult"], 6)}
 
     # ---- paid handler (only reachable after x402 verification) ------------
     @app.get("/intel/quote")

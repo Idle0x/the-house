@@ -35,7 +35,7 @@ from sibyl_memory_client.exceptions import NotFoundError
 # Journal kinds — KEEP STABLE. E2 (calibrate) scores decisions off
 # extra.kind, and the COLD journal is the audit trail.
 KINDS = ("served", "caller_fault", "refund", "paid", "failure", "job",
-         "audit", "refunded")
+         "audit", "refunded", "bond", "claim")
 
 DEFAULT_DB = Path("~/.sibyl-memory/memory.db").expanduser()
 
