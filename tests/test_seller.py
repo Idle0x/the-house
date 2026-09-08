@@ -117,7 +117,9 @@ def test_house_compile_endpoint_compiles_scars(tmp_path, monkeypatch):
     for _ in range(3):
         scars.record("/intel/upstream", "5xx upstream timeout", "provider timed out")
     client = TestClient(app)
-    r = client.post("/house/compile")
+    # FIX-4d: /house/compile is gated by a capability token when one is set.
+    r = client.post("/house/compile",
+                    headers={"x-house-capability": "test-token"})
     assert r.status_code == 200
     body = r.json()
     assert len(body["rules_created"]) == 1

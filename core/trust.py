@@ -111,6 +111,15 @@ class TrustLedger:
         return Decision(price_mult=mult, allow=True, segment=segment, reason="")
 
     # ------------------------------------------------------------------ #
+    def segment(self, row: Optional[dict]) -> tuple[str, float]:
+        """(segment, price_multiplier) for a caller row. New/unknown →
+        ("new", 1.0); banned → ("banned", 0.0). Pure read (no write)."""
+        if not row:
+            return ("new", C.PRICE_MULT.get("new", 1.0))
+        seg = row.get("segment", "new")
+        mult = C.PRICE_MULT.get(seg, 1.0)
+        return (seg, 0.0 if mult is None else mult)
+
     def update(self, addr: str, outcome: str, *, paid_usdc: float = 0.0) -> dict:
         """Apply an outcome to the caller's row. outcome in the KINDS set.
 
