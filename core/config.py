@@ -58,3 +58,19 @@ BOND_RISKY_MAX_QUALITY = 0.6     # below this (or >=1 default) → risky
 BOND_MAX_EXPOSURE = 10.0         # default open-book cap (face USDC)
 BOND_CAP_DECAY_PER_CLAIM = 1.0   # each remembered claim shrinks the cap by
                                  # this much face (the house remembers its limits)
+
+# --- room 4: the watchtower (market integrity) ---------------------------
+# Deterministic, memory-backed counterparty screens. NO ML, NO whole-market
+# census — the scope is the house's OWN observed caller set (recent window +
+# own traffic). Every rule is a pure function of per-caller memory so a
+# seeded wash ring is refused with the ring drawn, and deletion (no caller
+# rows) re-admits it. That before/after IS the demo.
+WATCH_SCREEN_PRICE = 0.02        # USDC for a screen (paid, x402)
+WATCH_SYBIL_CLUSTER_MIN = 3      # callers sharing one funding root → sybil ring
+WATCH_FACTORY_MIN = 3            # callers sharing the same fingerprints → factory
+WATCH_FACTORY_FP_OVERLAP = 2     # ...on at least this many shared fingerprints
+WATCH_COLD_MIN_SPEND = 0.05      # total paid >= this ...
+WATCH_COLD_MAX_TX = 1            # ...on <= this many tx → cold-start-with-volume
+WATCH_METRONOME_MIN_SERVES = 4   # need this many serves to measure timing
+WATCH_METRONOME_MAX_CV = 0.15    # inter-serve interval CV below this = metronome
+WATCH_FEED_MAX = 50              # verdict feed cap (state "watch_feed")
