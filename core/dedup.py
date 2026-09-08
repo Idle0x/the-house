@@ -84,17 +84,24 @@ class DedupEngine:
         self.store(fp, answer)
         return row
 
-    def note_repeat(self, price_usdc: float) -> dict:
-        """Increment the money counter: hits, usdc_saved, compute_avoided_usd."""
+    def note_repeat(self, price_usdc: float, *, compute_avoided: bool = True) -> dict:
+        """Increment the money counter: hits, usdc_saved, compute_avoided_usd.
+
+        ``compute_avoided`` is TRUE only when the repeat was served from the
+        cache WITHOUT re-running the work (audit SEV-1: the counter used to
+        claim +$0.001 even when `_do_work` had run on every repeat). The
+        ~$0.001 estimate is added only when compute was genuinely avoided.
+        """
         stats = self.m.get_state("dedup_stats") or {
             "hits": 0, "usdc_saved": 0.0, "compute_avoided_usd": 0.0,
         }
         stats["hits"] = int(stats.get("hits", 0)) + 1
         stats["usdc_saved"] = round(float(stats.get("usdc_saved", 0.0)) + price_usdc, 6)
         # Compute estimate: ~$0.001 of LLM/compute per served answer.
-        stats["compute_avoided_usd"] = round(
-            float(stats.get("compute_avoided_usd", 0.0)) + 0.001, 6
-        )
+        if compute_avoided:
+            stats["compute_avoided_usd"] = round(
+                float(stats.get("compute_avoided_usd", 0.0)) + 0.001, 6
+            )
         self.m.set_state("dedup_stats", stats)
         return stats
 
