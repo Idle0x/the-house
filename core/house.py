@@ -52,9 +52,6 @@ from core.watch import Watchtower
 
 log = logging.getLogger("the-house.engine")
 
-DEFAULT_INTEL = ("The house remembers its counterparties. "
-                 "That memory is the price, the refusal, the repeat.")
-
 
 def _failure_class(exc: BaseException) -> str:
     name = type(exc).__name__
@@ -101,7 +98,68 @@ class House:
 
     # ------------------------------------------------------------------ #
     def _default_work(self, payer: str) -> dict[str, Any]:
-        return {"intel": DEFAULT_INTEL}
+        """The real serve body: a memory-derived brief about the caller.
+
+        This is the product — "I remember who you are." The intel is not a
+        canned line; it is the relationship the house has with THIS payer,
+        read live from its own memory: who they are (segment + trust), how
+        long the house has known them, what they've paid, and the watchtower's
+        current verdict on them. Deletion → no standing → the brief collapses
+        to "new wallet, list price" (the gate, inside the product).
+        """
+        row = self.ledger.recall(payer) or {}
+        standing = {
+            "segment": row.get("segment"),
+            "trust_score": row.get("trust_score"),
+            "tx_count": int(row.get("tx_count", 0)),
+            "served": int(row.get("served_count", 0)),
+            "dedup_hits": int(row.get("dedup_hits", 0)),
+            "lifetime_usdc": round(float(row.get("total_paid_usdc", 0.0) or 0.0), 6),
+            "first_seen": row.get("first_seen"),
+            "last_seen": row.get("last_seen"),
+        }
+        # The watchtower's live verdict on this caller (read-only; no feed write).
+        verdict = None
+        evidence: list[str] = []
+        if self.watch is not None:
+            try:
+                a = self.watch.assess(payer)
+                verdict = a.get("verdict")
+                evidence = [e.get("rule") for e in a.get("evidence", [])]
+            except Exception:  # noqa: BLE001 - watch is best-effort in the brief
+                verdict = None
+
+        segment = standing["segment"]
+        known = standing["tx_count"] > 0
+        if not known:
+            brief = ("New wallet. The house has no memory of you yet — you "
+                     "are priced at list and every serve is billed in full. "
+                     "Pay, and the house will start to remember.")
+        else:
+            tenure = ""
+            first = standing.get("first_seen")
+            if first:
+                days = (time.time() - float(first)) / 86400.0
+                tenure = (f" The house has known you {days:.0f} day"
+                          + ("s" if abs(days - 1) >= 0.5 else "") +
+                          f" ({standing['tx_count']} settlement"
+                           + ("s" if standing['tx_count'] != 1 else "") + ").")
+            brief = (f"You are a {segment} counterparty "
+                     f"(trust {standing['trust_score']}). "
+                     f"Net charged to you this lifetime: "
+                     f"${standing['lifetime_usdc']:g}." + tenure)
+            if standing["dedup_hits"]:
+                brief += (f" {standing['dedup_hits']} repeat request"
+                          + ("s" if standing['dedup_hits'] != 1 else "")
+                          + " served from cache at no charge.")
+        if verdict in ("HOLD", "ABORT"):
+            brief += (f" Watchtower verdict on you right now: {verdict}"
+                      + (f" ({', '.join(evidence)})." if evidence else "."))
+        # NOTE: the envelope already carries the authoritative, POST-UPDATE
+        # standing (and the repeat path replays the cached answer). So the
+        # answer must NOT re-emit a top-level "standing" — it would clobber
+        # the envelope's. The brief is self-contained in the intel string.
+        return {"intel": brief, "watch_verdict": verdict, "brief_standing": standing}
 
     def _drive(self, job: dict[str, Any]) -> None:
         """Executor re-drive: finish a job killed mid-serve. Re-runs the work
