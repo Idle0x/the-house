@@ -596,10 +596,44 @@ def build_app() -> FastAPI:
 
     @app.get("/house/audit", include_in_schema=False)
     def route_audit():
+        """E1 read-only view: the LAST self-audit report (baseline is set /
+        refreshed at boot and on POST /house/audit/run). GETs never mutate —
+        a cache-buster or crawler must not be able to move the baseline."""
+        return {"house": SERVICE_NAME,
+                **({"memory": "disabled"} if memory.disabled() else {}),
+                "last_audit": house.auditor.last_audit()}
+
+    @app.post("/house/audit/run", include_in_schema=False)
+    def route_audit_run(request: Request):
+        """E1 mutation: run the self-audit now (diff vs the stored baseline).
+        Capability-gated when HOUSE_COMPILE_TOKEN is set (FIX-4d)."""
+        token = os.getenv("HOUSE_COMPILE_TOKEN", "").strip()
+        if token:
+            given = request.headers.get("x-house-capability", "")
+            if given != token:
+                return JSONResponse(status_code=403,
+                                    content={"error": "capability token required"})
         return {"house": SERVICE_NAME, **house.auditor.audit()}
 
     @app.get("/house/calibrate", include_in_schema=False)
     def route_calibrate():
+        """E2 read-only view: the LAST calibration report. Calibration is
+        computed on POST /house/calibrate/run (it writes REFERENCE), so this
+        GET never mutates state."""
+        return {"house": SERVICE_NAME,
+                **({"memory": "disabled"} if memory.disabled() else {}),
+                "last_calibration": house.calibrator.last_calibration()}
+
+    @app.post("/house/calibrate/run", include_in_schema=False)
+    def route_calibrate_run(request: Request):
+        """E2 mutation: score the house's own past decisions now (writes the
+        calibration REFERENCE). Capability-gated when a token is set."""
+        token = os.getenv("HOUSE_COMPILE_TOKEN", "").strip()
+        if token:
+            given = request.headers.get("x-house-capability", "")
+            if given != token:
+                return JSONResponse(status_code=403,
+                                    content={"error": "capability token required"})
         return {"house": SERVICE_NAME, **house.calibrator.calibrate()}
 
     @app.get("/house/bonds", include_in_schema=False)

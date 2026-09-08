@@ -222,6 +222,12 @@ class Watchtower:
         """Own-serve-path check: record the arrival, return the refusal body
         when the tower says ABORT. None → serve.
 
+        Uses the pure ``assess()`` — it does NOT publish a CLEAR/HOLD verdict
+        for every ordinary serve (audit finding: ``screen()`` on every paid
+        serve wrote a CLEAR feed entry + journal event; the feed should show
+        verdicts that MEAN something). Only an ABORT is published (feed +
+        kind=refuse), because the refusal is the news.
+
         The refusal is returned to the handler BEFORE settlement, so the
         caller is genuinely uncharged — the house declines the payment and
         says why. Deletion: with memory disabled the house never consults,
@@ -231,10 +237,14 @@ class Watchtower:
         if self.m.disabled():
             return None
         self.note_serve(payer)
-        s = self.screen(payer)
+        s = self.assess(payer)
         if s["verdict"] != VERDICT_ABORT:
             return None
         rules = ", ".join(e["rule"] for e in s["evidence"])
+        self._feed_push({"ts": time.time(), "wallet": payer,
+                         "verdict": s["verdict"],
+                         "rules": [e["rule"] for e in s["evidence"]],
+                         "ring": s["ring"]})
         self.m.write_event(
             f"watchtower REFUSED payment from {_short(payer)} ({rules})",
             kind="refuse")

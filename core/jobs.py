@@ -162,6 +162,34 @@ class JobStateMachine:
             self._save(jobs)
         return resumed
 
+    def prune(self, keep: int = 200) -> int:
+        """Bound the jobs state document (audit finding: settled jobs were
+        never pruned — ``snapshot(50)`` truncated display only, so the HOT
+        state grew forever against the 2MB cap).
+
+        Drops the OLDEST terminal (settled/refunded/failed) rows beyond
+        ``keep``, newest-first by ``updated_at``. Non-terminal rows are ALWAYS
+        kept (they are the live resume surface). The full audit trail is not
+        lost: every settle already wrote a COLD journal event (kind=paid).
+
+        Returns the number of rows removed. Call on startup so a long-lived
+        house's job state stays bounded across restart cycles.
+        """
+        jobs = self._jobs()
+        if len(jobs) <= keep:
+            return 0
+        non_terminal = {jid: j for jid, j in jobs.items()
+                        if j.get("phase") not in TERMINAL}
+        terminal = sorted(
+            ((jid, j) for jid, j in jobs.items()
+             if j.get("phase") in TERMINAL),
+            key=lambda kv: float(kv[1].get("updated_at", 0)), reverse=True)
+        kept_terminal = {jid: j for jid, j in terminal[:max(keep - len(non_terminal), 0)]}
+        removed = len(jobs) - len(non_terminal) - len(kept_terminal)
+        if removed > 0:
+            self._save({**non_terminal, **kept_terminal})
+        return removed
+
     def pending_count(self) -> int:
         jobs = self._jobs()
         return sum(1 for j in jobs.values()
