@@ -190,7 +190,8 @@ def build_app() -> FastAPI:
                          "The house assumes nothing.",
             "memory": "disabled" if memory.disabled() else "live",
             "paid": ["/intel/quote"],
-            "free": ["/house/ledger"],
+            "free": ["/house/ledger", "/house/jobs", "/house/audit",
+                     "/house/calibrate"],
         }
 
     @app.get("/house/ledger", include_in_schema=False)
