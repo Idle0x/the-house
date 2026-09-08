@@ -111,7 +111,11 @@ def build_app() -> FastAPI:
     server.register(NETWORK, ExactEvmServerScheme())
 
     # ---- memory + trust + dedup (the whole point) -----------------------
-    memory = HouseMemory()
+    # Isolated house DB (gitignored data/) — not the shared ~/.sibyl default,
+    # so the live ledger tells the house's own story.
+    db_path = os.getenv("HOUSE_MEMORY_DB",
+                        str(Path(__file__).resolve().parents[2] / "data" / "memory.db"))
+    memory = HouseMemory(db_path)
     ledger = TrustLedger(memory)
     dedup = DedupEngine(memory)
     log.info("memory: disabled=%s db=%s", memory.disabled(), memory.db_path)
@@ -120,8 +124,8 @@ def build_app() -> FastAPI:
         "/intel/quote": RouteConfig(
             accepts=PaymentOption(
                 scheme="exact",
-                pay_to=_house_wallet,
-                price=_price_str(BASE_PRICE),  # base; memory acts on payer
+                pay_to=_house_wallet(),  # static receiver (not a callback)
+                price=BASE_PRICE,        # base quote; memory acts on payer
                 network=NETWORK,
                 max_timeout_seconds=600,
             ),

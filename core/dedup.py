@@ -68,8 +68,14 @@ class DedupEngine:
     # ------------------------------------------------------------------ #
     def mark_served(self, caller_row: dict, addr: str, fp: str,
                     answer: dict, price_usdc: float) -> dict:
-        """Append fp + write cache. Returns the updated caller row."""
-        row = dict(caller_row)
+        """Append fp + write cache. Returns the updated caller row.
+
+        Re-reads the CURRENT entity before writing so concurrent updates
+        (e.g. a trust bump from the same request) are not clobbered by a
+        stale snapshot.
+        """
+        current = self.m.get_entity("caller", addr)
+        row = dict(current) if current is not None else dict(caller_row)
         fps = list(row.get("dedup_fp") or [])
         if fp not in fps:
             fps.append(fp)
