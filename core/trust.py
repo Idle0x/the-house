@@ -113,10 +113,19 @@ class TrustLedger:
     # ------------------------------------------------------------------ #
     def segment(self, row: Optional[dict]) -> tuple[str, float]:
         """(segment, price_multiplier) for a caller row. New/unknown →
-        ("new", 1.0); banned → ("banned", 0.0). Pure read (no write)."""
+        ("new", 1.0); banned → ("banned", 0.0). Pure read (no write).
+
+        The segment is RE-DERIVED from the live counters (``compute_segment``)
+        rather than trusted from the possibly-stale stored ``segment`` label —
+        a row that was seeded or written before a threshold change can carry
+        an outdated projection. Every pricing/refusal decision reads what the
+        counters ACTUALLY imply right now, so the enforcement surface is
+        consistent with ``decision()``/``update()`` (audit finding: the serve
+        path priced off the stored label while docs claimed re-derivation).
+        """
         if not row:
             return ("new", C.PRICE_MULT.get("new", 1.0))
-        seg = row.get("segment", "new")
+        seg = compute_segment(row)
         mult = C.PRICE_MULT.get(seg, 1.0)
         return (seg, 0.0 if mult is None else mult)
 
