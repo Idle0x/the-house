@@ -189,12 +189,25 @@ class House:
         if not wallet_check.get("ok"):
             log.warning("startup: money-out wallet check FAILED %s — "
                         "rebates degrade to dry-run", wallet_check)
+        # Bound the jobs state: terminal rows older than the newest `keep`
+        # are pruned (the COLD journal keeps the full settle trail). A fresh
+        # boot must not inherit an unbounded HOT dict.
+        pruned = self.jobs.prune() if not self.m.disabled() else 0
         resumed = self.jobs.resume_all()
         self._executor = JobExecutor(self.jobs, self._drive)
         driven = self._executor.drive() if resumed else []
+        # E1: establish/refresh the self-audit baseline at boot (memory live
+        # only). The baseline is what a later /house/audit/run diffs against.
+        audit_status = None
+        if not self.m.disabled():
+            try:
+                audit_status = self.auditor.audit().get("status")
+            except Exception:  # noqa: BLE001 - self-audit is best-effort
+                audit_status = None
         return {"wallet_ok": bool(wallet_check.get("ok")),
                 "wallet_check": wallet_check,
-                "resumed": len(resumed), "driven": driven}
+                "resumed": len(resumed), "driven": driven,
+                "pruned": pruned, "audit": audit_status}
 
     # ------------------------------------------------------------------ #
     def _route_rule(self, route: str) -> Optional[dict]:
