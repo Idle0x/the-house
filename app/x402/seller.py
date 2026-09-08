@@ -30,14 +30,16 @@ from __future__ import annotations
 
 import logging
 import os
+import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, Callable, Awaitable, Optional
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse, Response
+from fastapi.responses import HTMLResponse, JSONResponse, Response
 
+from app.x402.landing import render_landing
 from core.house import House
 from core.memory import HouseMemory
 from core.settle_journal import decode_settlement_header
@@ -205,6 +207,44 @@ async def lifespan(app: FastAPI):
     yield
 
 
+def _git_commit() -> str:
+    """Short git SHA of the running checkout ("" outside a repo / on failure).
+    Surfaced on the landing page as the build identity."""
+    import subprocess
+    try:
+        out = subprocess.run(
+            ["git", "rev-parse", "--short", "HEAD"],
+            cwd=Path(__file__).resolve().parents[2],
+            capture_output=True, text=True, timeout=5,
+        )
+        return out.stdout.strip()
+    except Exception:  # noqa: BLE001 - build identity is best-effort
+        return ""
+
+
+def _repo_url() -> str:
+    """Public repo URL for the landing page. Reads the origin remote when
+    present; returns "" (page shows an honest 'private build page' line) when
+    there is no remote yet (Gate 5 push not done)."""
+    import subprocess
+    try:
+        out = subprocess.run(
+            ["git", "remote", "get-url", "origin"],
+            cwd=Path(__file__).resolve().parents[2],
+            capture_output=True, text=True, timeout=5,
+        )
+        url = out.stdout.strip()
+        if not url:
+            return ""
+        # normalize git@github.com:user/repo.git -> https://github.com/user/repo
+        if url.startswith("git@") and ":" in url:
+            hostpath = url.split("@", 1)[1]
+            url = "https://" + hostpath.replace(":", "/", 1)
+        return url.rstrip("/")
+    except Exception:  # noqa: BLE001
+        return ""
+
+
 def build_app() -> FastAPI:
     """Build the FastAPI app with the x402 payment middleware + journal."""
     from x402.http import FacilitatorConfig, HTTPFacilitatorClient
@@ -287,8 +327,11 @@ def build_app() -> FastAPI:
     app.state.journal = house.journal
 
     # ---- free routes (never gated) ---------------------------------------
-    @app.get("/", include_in_schema=False)
-    def route_landing():
+    @app.get("/manifest", include_in_schema=False)
+    def route_manifest():
+        """The machine-readable service descriptor (was the old ``/`` JSON
+        payload, now preserved here so nothing consuming it breaks). The
+        human landing page lives at ``/``."""
         return {
             "service": SERVICE_NAME,
             "one_liner": "Every x402 payment is anonymous and stateless. "
@@ -301,7 +344,37 @@ def build_app() -> FastAPI:
                 "settlements": house.journal.count(),
                 "settled_usdc": house.journal.total_usdc(),
             },
+            "stats": {
+                "settlements": house.journal.count(),
+                "usdc_settled": house.journal.total_usdc(),
+                "repeats_cached": house.dedup.stats().get("hits", 0),
+                "usdc_saved": house.dedup.stats().get("usdc_saved", 0.0),
+                "scars": len(memory.list_entities("scar", limit=500)),
+                "active_rules": len(house.scars.active_rules()),
+                "live_callers": len(memory.list_entities("caller", limit=200)),
+            },
         }
+
+    @app.get("/", include_in_schema=False, response_class=HTMLResponse)
+    def route_landing():
+        """The house's own landing page — a live mirror of the house's state.
+        Every number is rendered server-side from the real aggregates, so in
+        deletion mode (memory disabled) the page itself reads the collapse."""
+        ds = house.dedup.stats()
+        return HTMLResponse(render_landing(
+            memory_live=not memory.disabled(),
+            settlements=house.journal.count(),
+            usdc_settled=house.journal.total_usdc(),
+            repeats_cached=int(ds.get("hits", 0)),
+            usdc_saved=float(ds.get("usdc_saved", 0.0)),
+            scars=len(memory.list_entities("scar", limit=500)),
+            active_rules=len(house.scars.active_rules()),
+            live_callers=len(memory.list_entities("caller", limit=200)),
+            commit=_git_commit(),
+            base_price=house.base_price,
+            repo_url=_repo_url(),
+            ts=time.strftime("%Y-%m-%d %H:%M UTC", time.gmtime()),
+        ))
 
     @app.get("/house/ledger", include_in_schema=False)
     def route_ledger():

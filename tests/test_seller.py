@@ -76,9 +76,18 @@ def test_landing_route_free(tmp_path, monkeypatch):
     monkeypatch.setenv("HOUSE_MEMORY_DB", str(tmp_path / "memory.db"))
     app = build_app()
     client = TestClient(app)
+    # The human landing page is now HTML at /.
     r = client.get("/")
     assert r.status_code == 200
-    body = r.json()
+    assert "text/html" in r.headers["content-type"]
+    page = r.text
+    assert "THE" in page and "HOUSE" in page
+    assert "why memory is load-bearing" in page
+    assert "MEMORY LIVE" in page  # isolated fresh db => memory live
+    # The machine-readable descriptor moved to /manifest (old / JSON payload).
+    m = client.get("/manifest")
+    assert m.status_code == 200
+    body = m.json()
     assert body["service"] == "the-house"
     assert body["memory"] in ("live", "disabled")
 
@@ -91,6 +100,26 @@ def test_landing_route_free(tmp_path, monkeypatch):
     assert ledger_body["dedup"]["hits"] == 0
     # Day-1 wiring: the ledger also surfaces scar + job state.
     assert "scars" in ledger_body and "jobs" in ledger_body
+
+
+def test_landing_shows_collapse_when_memory_disabled(tmp_path, monkeypatch):
+    """SIBYL_DISABLED=1 => the landing page itself reads the collapse.
+
+    The deletion gate, visible: memory badge DISABLED, the collapse callout
+    shown, and every aggregate 0 — no hidden state behind the marketing.
+    """
+    from app.x402.seller import build_app
+    monkeypatch.setenv("HOUSE_MEMORY_DB", str(tmp_path / "memory.db"))
+    monkeypatch.setenv("SIBYL_DISABLED", "1")
+    app = build_app()
+    client = TestClient(app)
+    page = client.get("/").text
+    assert "MEMORY DISABLED" in page
+    assert "collapse show" in page  # the gate callout is rendered
+    manifest = client.get("/manifest").json()
+    assert manifest["memory"] == "disabled"
+    assert manifest["stats"]["settlements"] == 0
+    assert manifest["stats"]["live_callers"] == 0
 
 
 def test_house_jobs_endpoint_free(tmp_path, monkeypatch):
