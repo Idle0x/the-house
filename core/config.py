@@ -39,3 +39,22 @@ SEGMENTS = ("new", "regular", "vip", "risky", "banned")
 
 # --- dedup ---------------------------------------------------------------
 DEDUP_REPEAT_PRICE = 0.0  # charge nothing for a repeat (per-caller dedup)
+
+# --- room 2: the underwriting desk (bonds) --------------------------------
+# A bond guarantees a provider's work: the buyer pays a premium (priced from
+# what the house REMEMBERS about that provider); if the provider fails the
+# house pays the face from its own wallet. The actuarial table is
+# deterministic — no LLM, no judgment.
+BOND_FACE = 1.00                 # guaranteed payout if the provider fails
+BOND_BASE_PREMIUM = 0.05         # the 402 quote (standard-provider premium)
+BOND_PREMIUM_MULT = {
+    "proven": 0.50,              # clean record → 50% of the base premium
+    "standard": 1.00,            # unknown / thin record → base premium
+    "risky": 2.20,               # bad record → 2.2× base (prepay enforced)
+}
+BOND_PROVEN_MIN_QUALITY = 0.8
+BOND_PROVEN_MIN_ON_TIME = 0.9
+BOND_RISKY_MAX_QUALITY = 0.6     # below this (or >=1 default) → risky
+BOND_MAX_EXPOSURE = 10.0         # default open-book cap (face USDC)
+BOND_CAP_DECAY_PER_CLAIM = 1.0   # each remembered claim shrinks the cap by
+                                 # this much face (the house remembers its limits)
