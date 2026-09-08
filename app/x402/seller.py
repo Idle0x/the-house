@@ -28,6 +28,8 @@ from typing import Any, Optional
 from dotenv import load_dotenv
 from fastapi import FastAPI, Request
 
+from core.audit import SelfAuditor
+from core.calibrate import Calibrator
 from core.dedup import DedupEngine, fingerprint
 from core.jobs import JobStateMachine
 from core.memory import HouseMemory
@@ -150,6 +152,8 @@ def build_app() -> FastAPI:
     dedup = DedupEngine(memory)
     scars = ScarCompiler(memory)
     jobs = JobStateMachine(memory)
+    auditor = SelfAuditor(memory)
+    calibrator = Calibrator(memory, base_price=BASE_PRICE)
     log.info("memory: disabled=%s db=%s", memory.disabled(), memory.db_path)
 
     routes: dict[str, RouteConfig] = {
@@ -174,6 +178,8 @@ def build_app() -> FastAPI:
     app.state.dedup = dedup
     app.state.scars = scars
     app.state.jobs = jobs
+    app.state.auditor = auditor
+    app.state.calibrator = calibrator
 
     # ---- free routes (never gated) ---------------------------------------
     @app.get("/", include_in_schema=False)
@@ -236,6 +242,19 @@ def build_app() -> FastAPI:
             "active_rules": {rid: r for rid, r in scars.active_rules().items()},
             "scar_total": len(memory.list_entities("scar", limit=500)),
         }
+
+    @app.get("/house/audit", include_in_schema=False)
+    def route_audit():
+        """E1 — the house audits the house (free). Diff now vs its memory
+        of normal; first call records the baseline."""
+        report = auditor.audit()
+        return {"house": SERVICE_NAME, **report}
+
+    @app.get("/house/calibrate", include_in_schema=False)
+    def route_calibrate():
+        """E2 — the house grades itself (free). One-page calibration."""
+        report = calibrator.calibrate()
+        return {"house": SERVICE_NAME, **report}
 
     # ---- paid handler (only reachable after x402 settlement) -------------
     @app.get("/intel/quote")
