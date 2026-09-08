@@ -40,8 +40,10 @@ from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse, Response
 
 from app.x402.landing import render_landing
+from app.x402.gallery import render_gallery
 from core.bonds import UnderwritingDesk
-from core.config import BOND_BASE_PREMIUM, WATCH_SCREEN_PRICE
+from core.config import BOND_BASE_PREMIUM, INTEL_ENTITY_PRICE, WATCH_SCREEN_PRICE
+from core.dossier import Dossier
 from core.house import House
 from core.memory import HouseMemory
 from core.scout import SCOUT_HIRE_PRICE, SCOUT_REPORT_BASE, FrontOffice
@@ -316,6 +318,13 @@ def build_app() -> FastAPI:
     log.info("underwriting desk: face=$%.2f base_premium=$%.4f",
              desk.face, desk.base_premium)
 
+    # Room 5: the dossier — the cross-room read every paid entity query serves.
+    # One function reads all five rooms and assembles the house's complete,
+    # timestamped picture of a single counterparty (caller, provider, insured,
+    # payer). Deletion → "no record": the house only sells what it remembers.
+    dossier = Dossier(memory, desk=desk, front=front, watch=watch,
+                      journal=house.journal)
+
     routes: dict[str, RouteConfig] = {
         "/intel/quote": RouteConfig(
             accepts=PaymentOption(
@@ -404,6 +413,22 @@ def build_app() -> FastAPI:
             tags=["front-office", "hiring", "x402"],
             mime_type="application/json",
         ),
+        "GET /intel/entity/:name": RouteConfig(
+            accepts=PaymentOption(
+                scheme="exact",
+                pay_to=_house_wallet(),
+                price=INTEL_ENTITY_PRICE,
+                network=NETWORK,
+                max_timeout_seconds=600,
+            ),
+            description="The entity dossier: the house's complete remembered "
+                        "picture of one wallet across its rooms (trust, dedup, "
+                        "bonds, watch, journal), every field timestamped. "
+                        "Unknown entity = 404, uncharged.",
+            service_name=SERVICE_NAME,
+            tags=["intel", "entity", "dossier", "memory", "x402"],
+            mime_type="application/json",
+        ),
     }
 
     app = FastAPI(title="THE HOUSE", version="0.2.0", lifespan=lifespan)
@@ -422,6 +447,7 @@ def build_app() -> FastAPI:
     app.state.desk = desk
     app.state.watch = watch
     app.state.front = front
+    app.state.dossier = dossier
 
     # ---- free routes (never gated) ---------------------------------------
     @app.get("/manifest", include_in_schema=False)
@@ -434,11 +460,11 @@ def build_app() -> FastAPI:
             "one_liner": "Every x402 payment is anonymous and stateless. "
                          "The house assumes nothing.",
             "memory": "disabled" if memory.disabled() else "live",
-            "paid": ["/intel/quote", "POST /bond/quote", "POST /watch/screen",
-                     "POST /scout/report", "POST /scout/hire"],
+            "paid": ["/intel/quote", "GET /intel/entity/:name", "POST /bond/quote",
+                     "POST /watch/screen", "POST /scout/report", "POST /scout/hire"],
             "free": ["/house/ledger", "/house/jobs", "/house/audit",
                      "/house/calibrate", "/house/bonds", "/house/watch",
-                     "/house/front"],
+                     "/house/front", "/house/journal", "/gallery"],
             "money": {
                 "settlements": house.journal.count(),
                 "settled_usdc": house.journal.total_usdc(),
@@ -474,6 +500,35 @@ def build_app() -> FastAPI:
             repo_url=_repo_url(),
             ts=time.strftime("%Y-%m-%d %H:%M UTC", time.gmtime()),
         ))
+
+    @app.get("/gallery", include_in_schema=False, response_class=HTMLResponse)
+    def route_gallery():
+        """Room 5: the gallery — the watchable world. Every room, live, in the
+        house's own design language. Static HTML; the client keeps it fresh
+        from the free /house/* ledgers. Deletion → the collapse, visible."""
+        return HTMLResponse(render_gallery(
+            memory_live=not memory.disabled(),
+            commit=_git_commit(),
+            base_price=house.base_price,
+            ts=time.strftime("%Y-%m-%d %H:%M UTC", time.gmtime()),
+        ))
+
+    @app.get("/house/journal", include_in_schema=False)
+    def route_journal():
+        """The season log: the house's cold journal, newest first, with the
+        kind of every entry. The recall surface — the memory, readable by
+        anyone. Deletion → empty (no events remembered)."""
+        events = memory.read_events(limit=200)
+        return {
+            "house": SERVICE_NAME,
+            "memory": "disabled" if memory.disabled() else "live",
+            "events": [{
+                "id": e.get("id"),
+                "ts": e.get("ts"),
+                "kind": (e.get("extra") or {}).get("kind"),
+                "text": " ".join(e.get("acted") or []),
+            } for e in events],
+        }
 
     @app.get("/house/ledger", include_in_schema=False)
     def route_ledger():
@@ -701,6 +756,41 @@ def build_app() -> FastAPI:
         if status >= 400:
             return JSONResponse(status_code=status, content=body)
         return body
+
+    # ---- paid handler (only reachable after x402 verification) ------------
+    @app.get("/intel/entity/{name}")
+    def route_intel_entity(name: str, request: Request):
+        """Room 5: the entity dossier — the house's complete remembered
+        picture of one wallet, across every room (trust, dedup, bonds, watch,
+        journal), every field timestamped. Paid (dossier price quoted onchain).
+
+        The house only sells what it has: an entity it has never observed as a
+        caller, provider, insured, or payer is a 404, uncharged (>=400 cancels
+        the settlement). It never fabricates a profile it never remembered.
+        """
+        name = (name or "").strip()
+        if not name:
+            return JSONResponse(status_code=400,
+                                 content={"error": "entity name required"})
+        payer = extract_payer(getattr(request.state, "payment_payload", None))
+        if payer is None:
+            # Verified payment, no recoverable payer: server failure (5xx
+            # cancels settlement — the buyer is not charged for a dossier it
+            # cannot attribute to a payer).
+            return JSONResponse(
+                status_code=502, content={"error": "payer unknown after settlement"})
+        dossier: Dossier = request.app.state.dossier  # type: ignore[attr-defined]
+        result = dossier.build(name)
+        if not result["found"]:
+            # The house has no record of this entity. 404 cancels settlement
+            # (uncharged) — honesty: we sell the memory we have, nothing more.
+            return JSONResponse(status_code=404, content={
+                "entity": name,
+                "found": False,
+                "note": result["note"],
+                "uncharged": True,
+            })
+        return {"house": SERVICE_NAME, "payer_last6": payer[-6:], **result}
 
     app.add_middleware(
         make_journal_middleware(house.journal),

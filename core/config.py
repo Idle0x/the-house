@@ -74,3 +74,10 @@ WATCH_COLD_MAX_TX = 1            # ...on <= this many tx → cold-start-with-vol
 WATCH_METRONOME_MIN_SERVES = 4   # need this many serves to measure timing
 WATCH_METRONOME_MAX_CV = 0.15    # inter-serve interval CV below this = metronome
 WATCH_FEED_MAX = 50              # verdict feed cap (state "watch_feed")
+
+# --- room 5: the gallery / entity dossier (presentation + product truth) ---
+# The dossier is the cross-room read: what the house REMEMBERS about one
+# wallet across trust, dedup, bonds, watch and the settlement journal. The
+# house only sells what it has; an unknown entity is a 404 (settlement
+# cancelled → uncharged), never a fabricated profile.
+INTEL_ENTITY_PRICE = 0.02        # USDC for an entity dossier (paid, x402)

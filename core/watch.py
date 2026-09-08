@@ -159,11 +159,12 @@ class Watchtower:
     # ------------------------------------------------------------------ #
     # Screen + serve-path consult.
     # ------------------------------------------------------------------ #
-    def screen(self, wallet: str) -> dict[str, Any]:
-        """Deterministic counterparty screen: CLEAR / HOLD / ABORT + evidence.
+    def assess(self, wallet: str) -> dict[str, Any]:
+        """The pure screen: CLEAR / HOLD / ABORT + evidence + ring.
 
-        The verdict is a pure function of the house's remembered caller set.
-        Deletion → no rows → no clusters → the wash caller is re-admitted.
+        NO memory writes — this is the read-only form, so the dossier (Room 5)
+        can surface a counterparty's current verdict without publishing it to
+        the public verdict feed. ``screen()`` = assess + publish.
         """
         wallet = (wallet or "").strip()
         evidence: list[dict[str, str]] = []
@@ -181,14 +182,6 @@ class Watchtower:
                     verdict = VERDICT_ABORT
                 elif verdict != VERDICT_ABORT:
                     verdict = VERDICT_HOLD
-            self._feed_push({"ts": time.time(), "wallet": wallet,
-                             "verdict": verdict,
-                             "rules": [e["rule"] for e in evidence],
-                             "ring": ring})
-            self.m.write_event(
-                f"watch screen {_short(wallet)} -> {verdict} "
-                f"({', '.join(e['rule'] for e in evidence) or 'clean'})",
-                kind="screen")
         return {
             "wallet": wallet,
             "verdict": verdict,
@@ -197,6 +190,24 @@ class Watchtower:
             "scope": "own observed caller set (recent window) — no "
                      "whole-market census",
         }
+
+    def screen(self, wallet: str) -> dict[str, Any]:
+        """Deterministic counterparty screen: assess + PUBLISH.
+
+        The verdict is a pure function of the house's remembered caller set.
+        Deletion → no rows → no clusters → the wash caller is re-admitted.
+        """
+        result = self.assess(wallet)
+        if wallet:
+            self._feed_push({"ts": time.time(), "wallet": wallet,
+                             "verdict": result["verdict"],
+                             "rules": [e["rule"] for e in result["evidence"]],
+                             "ring": result["ring"]})
+            self.m.write_event(
+                f"watch screen {_short(wallet)} -> {result['verdict']} "
+                f"({', '.join(e['rule'] for e in result['evidence']) or 'clean'})",
+                kind="screen")
+        return result
 
     def note_serve(self, payer: str) -> None:
         """Record an arrival timestamp (the metronome's raw material)."""
