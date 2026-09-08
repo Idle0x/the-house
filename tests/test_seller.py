@@ -168,3 +168,80 @@ def test_paid_serve_creates_settled_job(tmp_path, monkeypatch):
     m2 = HouseMemory(str(tmp_path / "memory.db"))
     jobs2 = JobStateMachine(m2)
     assert jobs2.resume_all() == []
+
+
+# --- direct handler tests: the paid route function with a stub request ------
+
+class _StubState:
+    """Minimal request.state stand-in carrying a settled payment payload."""
+
+    def __init__(self, payer: str):
+        self.payment_payload = {"payer": payer}
+
+
+class _StubRequest:
+    """Minimal Request stand-in exposing app.state + state as the handler needs."""
+
+    def __init__(self, app, payer: str):
+        self.app = app
+        self.state = _StubState(payer)
+
+
+def _paid_handler_fn(app):
+    from fastapi.routing import APIRoute
+    for route in app.routes:
+        if isinstance(route, APIRoute) and route.path == "/intel/quote":
+            return route.endpoint
+    raise AssertionError("paid route not found")
+
+
+def test_banned_wallet_refused_403_no_fake_refund(tmp_path, monkeypatch):
+    """C2 fix: banned → HTTP 403 (x402 middleware cancels settlement), and
+    the ledger is NOT polluted with a fake 'refund' event."""
+    from app.x402.seller import build_app
+    from core.trust import TrustLedger
+    monkeypatch.setenv("HOUSE_MEMORY_DB", str(tmp_path / "memory.db"))
+    app = build_app()
+    ledger: TrustLedger = app.state.ledger
+    bad = "0x" + "C" * 40
+    for _ in range(3):
+        ledger.update(bad, "refund")      # → banned
+    assert ledger.decision(bad).segment == "banned"
+
+    refund_events_before_row = ledger.recall(bad)
+    assert refund_events_before_row is not None
+    refund_events_before = refund_events_before_row["refund_events"]
+    handler = _paid_handler_fn(app)
+    resp = handler(_StubRequest(app, bad))
+    assert resp.status_code == 403
+    body = resp.body.decode()
+    assert "declines" in body
+    # No extra refund event was booked (no money moved — nothing to refund).
+    after = ledger.recall(bad)
+    assert after is not None
+    assert after["refund_events"] == refund_events_before
+
+
+def test_fresh_serve_returns_post_update_standing(tmp_path, monkeypatch):
+    """H5 fix: the response standing reflects the JUST-completed serve
+    (tx_count already incremented), not the pre-update row."""
+    from app.x402.seller import build_app
+    monkeypatch.setenv("HOUSE_MEMORY_DB", str(tmp_path / "memory.db"))
+    app = build_app()
+    payer = "0x" + "D" * 40
+    handler = _paid_handler_fn(app)
+    # Success responses are plain dicts (FastAPI wraps them later); only
+    # the refusal path returns a JSONResponse.
+    resp = handler(_StubRequest(app, payer))
+    body = resp if isinstance(resp, dict) else resp.json()
+    assert body["cached"] is False
+    # tx_count must reflect this very serve (1), not 0.
+    assert body["standing"]["tx_count"] == 1
+    assert body["standing"]["segment"] == "new"
+    assert body["house"]["trust_score"] > 50  # trust bumped (+3)
+    # Second identical request = dedup repeat → dedup_hits incremented (H2).
+    resp2 = handler(_StubRequest(app, payer))
+    body2 = resp2 if isinstance(resp2, dict) else resp2.json()
+    assert body2["cached"] is True
+    assert body2["standing"]["dedup_hits"] == 1
+    assert body2["house"]["repeat_of"] is not None

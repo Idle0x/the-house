@@ -20,6 +20,10 @@ def ledger():
     return TrustLedger(m)
 
 
+def _mem() -> HouseMemory:
+    return HouseMemory(f"/tmp/house_f1_{uuid.uuid4().hex}.db")
+
+
 def test_new_caller_gets_list_price(ledger):
     addr = "0x" + "1" * 40
     d = ledger.decision(addr)
@@ -80,6 +84,31 @@ def test_journal_kinds_written(ledger):
     evs = ledger.m.read_events()
     kinds = [e.get("extra", {}).get("kind") for e in evs]
     assert "served" in kinds and "caller_fault" in kinds
+
+
+def test_first_seen_and_last_seen_stamped():
+    """H1 fix: caller rows carry real timestamps (was None forever)."""
+    addr = "0x" + "7" * 40
+    row = TrustLedger(_mem()).on_first(addr)
+    assert isinstance(row["first_seen"], float) and row["first_seen"] > 0
+    assert isinstance(row["last_seen"], float) and row["last_seen"] > 0
+    # update() refreshes last_seen.
+    led = TrustLedger(_mem())
+    led.on_first(addr)
+    led.update(addr, "served", paid_usdc=0.01)
+    r2 = led.recall(addr)
+    assert r2 is not None and r2["last_seen"] >= r2["first_seen"]
+
+
+def test_note_dedup_increments_caller_counter():
+    """H2 fix: per-caller dedup_hits counter actually increments."""
+    addr = "0x" + "8" * 40
+    led = TrustLedger(_mem())
+    led.on_first(addr)
+    led.note_dedup(addr)
+    led.note_dedup(addr)
+    row = led.recall(addr)
+    assert row is not None and row["dedup_hits"] == 2
 
 
 def test_deletion_mode_vip_and_stranger_price_identically():
