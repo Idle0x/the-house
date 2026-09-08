@@ -44,6 +44,7 @@ from core.bonds import UnderwritingDesk
 from core.config import BOND_BASE_PREMIUM, WATCH_SCREEN_PRICE
 from core.house import House
 from core.memory import HouseMemory
+from core.scout import SCOUT_HIRE_PRICE, SCOUT_REPORT_BASE, FrontOffice
 from core.settle_journal import decode_settlement_header
 from core.wallet import HouseWallet, USDC_BASE
 from core.watch import Watchtower
@@ -298,6 +299,9 @@ def build_app() -> FastAPI:
     # observed caller set. It guards the serve path (refuse to launder) and
     # sells standalone screens on /watch/screen.
     watch = Watchtower(memory, house_wallet=_house_wallet())
+    # Room 3: the front office — memory-driven drafting/scouting over the
+    # provider WARM rows the ACP delegator already writes (Gate 4 muscle).
+    front = FrontOffice(memory)
     house = House(memory, base_price=BASE_PRICE, service_name=SERVICE_NAME,
                   wallet=wallet_obj,
                   wallet_check=_acp_wallet_check if live_money_out else None,
@@ -363,6 +367,43 @@ def build_app() -> FastAPI:
             tags=["watchtower", "integrity", "x402"],
             mime_type="application/json",
         ),
+        # Room 3: the front office — the house sells what it has experienced.
+        # A scout report = the provider's remembered record (jobs, quality,
+        # defaults, bond claims) + the terms it would offer. A hire decision
+        # = the draft ruling. Both are pure memory: SIBYL_DISABLED quotes the
+        # base for everyone (blind hiring). The onchain price is the base;
+        # memory adds nothing on the wire (settlement = the quote) — the
+        # premium the engine computes is the *reported* quote, visible in the
+        # receipt, not a surcharge.
+        "POST /scout/report": RouteConfig(
+            accepts=PaymentOption(
+                scheme="exact",
+                pay_to=_house_wallet(),
+                price=SCOUT_REPORT_BASE,
+                network=NETWORK,
+                max_timeout_seconds=600,
+            ),
+            description="Scout report: the house's hiring memory for a "
+                        "provider (record + terms + memory-priced quote).",
+            service_name=SERVICE_NAME,
+            tags=["front-office", "scouting", "x402"],
+            mime_type="application/json",
+        ),
+        "POST /scout/hire": RouteConfig(
+            accepts=PaymentOption(
+                scheme="exact",
+                pay_to=_house_wallet(),
+                price=SCOUT_HIRE_PRICE,
+                network=NETWORK,
+                max_timeout_seconds=600,
+            ),
+            description="Hire decision: draft the provider (preferred terms, "
+                        "standard + stricter evaluator, or refuse) from the "
+                        "house's own hiring memory.",
+            service_name=SERVICE_NAME,
+            tags=["front-office", "hiring", "x402"],
+            mime_type="application/json",
+        ),
     }
 
     app = FastAPI(title="THE HOUSE", version="0.2.0", lifespan=lifespan)
@@ -380,6 +421,7 @@ def build_app() -> FastAPI:
     app.state.journal = house.journal
     app.state.desk = desk
     app.state.watch = watch
+    app.state.front = front
 
     # ---- free routes (never gated) ---------------------------------------
     @app.get("/manifest", include_in_schema=False)
@@ -392,9 +434,11 @@ def build_app() -> FastAPI:
             "one_liner": "Every x402 payment is anonymous and stateless. "
                          "The house assumes nothing.",
             "memory": "disabled" if memory.disabled() else "live",
-            "paid": ["/intel/quote", "POST /bond/quote", "POST /watch/screen"],
+            "paid": ["/intel/quote", "POST /bond/quote", "POST /watch/screen",
+                     "POST /scout/report", "POST /scout/hire"],
             "free": ["/house/ledger", "/house/jobs", "/house/audit",
-                     "/house/calibrate", "/house/bonds", "/house/watch"],
+                     "/house/calibrate", "/house/bonds", "/house/watch",
+                     "/house/front"],
             "money": {
                 "settlements": house.journal.count(),
                 "settled_usdc": house.journal.total_usdc(),
@@ -519,6 +563,13 @@ def build_app() -> FastAPI:
                 "stats": watch.stats(),
                 "feed": watch.feed()}
 
+    @app.get("/house/front", include_in_schema=False)
+    def route_front(request: Request):
+        """Room 3's public ledger: the draft board — every provider the
+        house remembers, with segment + terms. Deletion → empty board."""
+        front: FrontOffice = request.app.state.front  # type: ignore[assignment]
+        return {"house": SERVICE_NAME, **front.board()}
+
     # ---- paid handler (only reachable after x402 verification) ------------
     @app.post("/bond/quote")
     async def route_bond_quote(request: Request):
@@ -583,6 +634,54 @@ def build_app() -> FastAPI:
             return JSONResponse(status_code=502,
                                  content={"error": "payer unknown after settlement"})
         return {"house": SERVICE_NAME, **watch.screen(wallet)}
+
+    # ---- paid handler (only reachable after x402 verification) ------------
+    @app.post("/scout/report")
+    async def route_scout_report(request: Request):
+        """Room 3: sell a scout report. Paid (report base quoted onchain).
+        The report is what the house has EXPERIENCED with the provider —
+        jobs done, quality, on-time, defaults, bond claims — plus the terms
+        it would offer. The receipt carries the memory-priced quote (a costly
+        memory quotes a premium); the wire settles the base."""
+        body = await request.json()
+        provider = str(body.get("provider", "")).strip()
+        if not provider:
+            return JSONResponse(status_code=400,
+                                 content={"error": "provider address required"})
+        payer = extract_payer(getattr(request.state, "payment_payload", None))
+        if payer is None:
+            return JSONResponse(status_code=502,
+                                 content={"error": "payer unknown after settlement"})
+        front: FrontOffice = request.app.state.front  # type: ignore[assignment]
+        return {"house": SERVICE_NAME, "payer_last6": payer[-6:],
+                **front.report(provider)}
+
+    # ---- paid handler (only reachable after x402 verification) ------------
+    @app.post("/scout/hire")
+    async def route_scout_hire(request: Request):
+        """Room 3: sell a hire decision. Paid (hire decision quoted onchain).
+        The draft ruling from the house's hiring memory: proven → preferred
+        terms; unknown → standard + stricter evaluator; risky → refused."""
+        body = await request.json()
+        provider = str(body.get("provider", "")).strip()
+        if not provider:
+            return JSONResponse(status_code=400,
+                                 content={"error": "provider address required"})
+        payer = extract_payer(getattr(request.state, "payment_payload", None))
+        if payer is None:
+            return JSONResponse(status_code=502,
+                                 content={"error": "payer unknown after settlement"})
+        front: FrontOffice = request.app.state.front  # type: ignore[assignment]
+        decision = front.decision(provider)
+        if decision["refused"]:
+            # The house refuses to draft this provider — refuse BEFORE we
+            # would have done work (403 cancels settlement: uncharged).
+            return JSONResponse(status_code=403, content={
+                "error": "the house will not draft this provider",
+                "uncharged": True,
+                **decision,
+            })
+        return {"house": SERVICE_NAME, "payer_last6": payer[-6:], **decision}
 
     # ---- paid handler (only reachable after x402 verification) ------------
     @app.get("/intel/quote")
