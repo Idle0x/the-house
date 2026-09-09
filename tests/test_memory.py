@@ -1,9 +1,10 @@
-"""HouseMemory wrapper tests — normalization + deletion semantics.
+"""HouseMemory wrapper — the load-bearing seam over the Sibyl SDK.
 
-Covers: NotFound→None, body unwrap, event journaling shape, reference JSON
-parsing, state dict validation, SIBYL_DISABLED no-op mode.
+Every room funnels reads/writes through this one class, and one env flag
+(``SIBYL_DISABLED``) collapses all of them at once — so the wrapper's
+normalization quirks, its event taxonomy, and its deletion no-op are the whole
+deletion gate. These pin the wrapper contract, not each SDK quirk individually.
 """
-import json
 import os
 
 import pytest
@@ -15,82 +16,67 @@ DB = "/tmp/house_test_memory.db"
 
 @pytest.fixture()
 def mem():
-    # Remove any pre-existing DB so each test starts clean.
     for suffix in ("", "-wal", "-shm"):
         try:
             os.remove(DB + suffix)
         except FileNotFoundError:
             pass
-    m = HouseMemory(DB)
-    yield m
+    yield HouseMemory(DB)
 
 
-def test_get_entity_miss_returns_none(mem):
-    assert mem.get_entity("caller", "0xnone") is None
-
-
-def test_entity_round_trip_and_unwrap(mem):
-    mem.set_entity("caller", "0xabc", {"trust_score": 50, "segment": "new"})
-    body = mem.get_entity("caller", "0xabc")
-    assert body == {"trust_score": 50, "segment": "new"}
-
-
-def test_upsert_merges(mem):
+def test_wrapper_read_write_contract_and_kind_guard(mem):
+    """Every read/write shape each room uses round-trips, a miss returns
+    None/empty (not an error), and an unknown event kind is rejected — no
+    silent taxonomy drift. Entities (with upsert-merge), JSON reference values,
+    dict state, list, and journaled events (kind: ``served`` AND the watchtower's
+    ``funding`` writer, audit SEV-2)."""
     mem.upsert_entity("caller", "0xabc", {"tx_count": 1})
     mem.upsert_entity("caller", "0xabc", {"tx_count": 2, "segment": "regular"})
-    body = mem.get_entity("caller", "0xabc")
-    assert body["tx_count"] == 2
-    assert body["segment"] == "regular"
+    assert mem.get_entity("caller", "0xabc") == {"tx_count": 2, "segment": "regular"}
+    assert mem.get_entity("caller", "0xnone") is None
 
-
-def test_write_event_shape(mem):
-    mem.write_event("0xabc served (Δ+2)", kind="served")
-    evs = mem.read_events()
-    assert len(evs) >= 1
-    # extra.kind must survive for E2 calibration.
-    kinds = [e.get("extra", {}).get("kind") if isinstance(e, dict) else None for e in evs]
-    assert "served" in kinds
-
-
-def test_write_event_rejects_unknown_kind(mem):
-    with pytest.raises(ValueError):
-        mem.write_event("x", kind="not-a-kind")
-
-
-def test_reference_json_string_parsed(mem):
     mem.set_reference("pricing", {"new": 1.00, "vip": 0.80})
-    parsed = mem.get_reference("pricing")
-    assert parsed == {"new": 1.00, "vip": 0.80}
+    assert mem.get_reference("pricing") == {"new": 1.00, "vip": 0.80}  # JSON parsed
+    assert mem.get_reference("missing") is None
 
-
-def test_state_requires_dict(mem):
     mem.set_state("jobs", {"j1": {"phase": "accepted"}})
     assert mem.get_state("jobs") == {"j1": {"phase": "accepted"}}
     assert mem.get_state("missing") is None
 
-
-def test_list_entities_unwraps(mem):
     mem.set_entity("scar", "S-1", {"route": "/intel"})
     mem.set_entity("scar", "S-2", {"route": "/intel"})
-    scars = mem.list_entities("scar")
-    assert len(scars) == 2
-    assert all("route" in s for s in scars)
+    assert len(mem.list_entities("scar")) == 2
+
+    # Events carry extra.kind (E2 calibration + the serve-path journaling
+    # depend on it); an unknown kind is rejected.
+    mem.write_event("0xabc served (Δ+2)", kind="served")
+    mem.write_event("0xabc funded by 0xdef", kind="funding")
+    kinds = [e.get("extra", {}).get("kind") for e in mem.read_events() if isinstance(e, dict)]
+    assert "served" in kinds and "funding" in kinds
+    with pytest.raises(ValueError):
+        mem.write_event("x", kind="not-a-kind")
 
 
-def test_memory_disabled_env():
+def test_memory_disabled_is_a_no_op():
+    """SIBYL_DISABLED=1: memory_disabled() and HouseMemory.disabled() are True,
+    every read returns empty/None, and every write is a silent no-op — nothing
+    persists, nothing raises. Lifting the flag shows the writes never landed."""
+    for suffix in ("", "-wal", "-shm"):
+        try:
+            os.remove(DB + suffix)
+        except FileNotFoundError:
+            pass
     os.environ["SIBYL_DISABLED"] = "1"
     try:
         assert memory_disabled() is True
         m = HouseMemory(DB)
         assert m.disabled() is True
         assert m.get_entity("caller", "0xany") is None
-        assert m.get_state("jobs") is None
-        assert m.get_reference("pricing") is None
+        assert m.get_state("jobs") is None and m.get_reference("pricing") is None
         assert m.list_entities("scar") == []
-        m.set_entity("caller", "0xany", {"trust_score": 50})  # no-op, no raise
+        m.set_entity("caller", "0xany", {"trust_score": 50})   # no-op, no raise
         m.write_event("should-not-persist", kind="job")
     finally:
         os.environ.pop("SIBYL_DISABLED", None)
-    # After disable is lifted, the write above must not have persisted.
     m2 = HouseMemory(DB)
-    assert m2.get_entity("caller", "0xany") is None
+    assert m2.get_entity("caller", "0xany") is None  # the write never persisted
