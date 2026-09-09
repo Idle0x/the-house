@@ -81,3 +81,14 @@ WATCH_FEED_MAX = 50              # verdict feed cap (state "watch_feed")
 # house only sells what it has; an unknown entity is a 404 (settlement
 # cancelled → uncharged), never a fabricated profile.
 INTEL_ENTITY_PRICE = 0.02        # USDC for an entity dossier (paid, x402)
+
+# --- prepay top-up (the funding half of the risky-surcharge path) ----------
+# A risky wallet carries the surcharge on a PREPAID credit. The audit found
+# the credit was only ever debited, never funded — a permanent refusal. The
+# top-up charges the buyer (onchain) for the credit itself plus a small
+# handling fee; the credit lands on the caller row, spendable on the next
+# risky serve. The fee is what the house keeps (the credit is a liability the
+# house owes in service, not revenue).
+PREPAY_TOPUP_FEE = 0.005         # USDC handling fee on a prepay top-up
+PREPAY_TOPUP_MAX = 1.00          # cap a single top-up (a buyer needs cents,
+                                 # not a treasury)

@@ -225,11 +225,12 @@ class _EntityRequest:
     """Minimal stand-in for the FastAPI Request the paid handler needs:
     .state.payment_payload, .app.state.dossier (no .json() for a GET)."""
 
-    def __init__(self, dossier: Dossier, payer: str | None = "0x" + "E" * 40):
+    def __init__(self, dossier: Dossier, payer: str | None = "0x" + "E" * 40,
+                 house: House | None = None):
         self.state = types.SimpleNamespace(
             payment_payload={"payer": payer} if payer else None)
         self.app = types.SimpleNamespace(
-            state=types.SimpleNamespace(dossier=dossier))
+            state=types.SimpleNamespace(dossier=dossier, house=house))
 
 
 def _entity_handler(app):
@@ -271,9 +272,10 @@ def test_entity_handler_unknown_404_uncharged(tmp_path, monkeypatch):
     monkeypatch.setenv("HOUSE_MEMORY_DB", str(tmp_path / "memory.db"))
     app = build_app()
     d: Dossier = app.state.dossier  # type: ignore[assignment]
+    h: House = app.state.house  # type: ignore[assignment]
     handler = _entity_handler(app)
     assert handler is not None
-    out = handler(UNKNOWN, _EntityRequest(d))
+    out = handler(UNKNOWN, _EntityRequest(d, house=h))
     assert out.status_code == 404
     body = out.body if isinstance(out, dict) else __import__("json").loads(out.body)
     assert body.get("found") is False
@@ -286,9 +288,10 @@ def test_entity_handler_known_returns_picture(tmp_path, monkeypatch):
     m: HouseMemory = app.state.memory  # type: ignore[assignment]
     _seed_caller(m)
     d: Dossier = app.state.dossier  # type: ignore[assignment]
+    h: House = app.state.house  # type: ignore[assignment]
     handler = _entity_handler(app)
     assert handler is not None
-    out = handler(CALLER, _EntityRequest(d))
+    out = handler(CALLER, _EntityRequest(d, house=h))
     assert out["found"] is True
     assert out["payer_last6"] == "E" * 6
     assert out["as_caller"]["segment"] == "vip"

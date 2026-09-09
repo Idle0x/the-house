@@ -44,6 +44,7 @@ from core.dedup import DedupEngine, fingerprint
 from core.executor import JobExecutor
 from core.jobs import JobStateMachine
 from core.memory import HouseMemory
+from core.config import INTEL_ENTITY_PRICE
 from core.scars import ScarCompiler
 from core.settle_journal import SettlementJournal
 from core.trust import TrustLedger
@@ -77,7 +78,8 @@ class House:
                  do_work_secondary: Optional[Callable[[str], dict[str, Any]]] = None,
                  wallet_check: Optional[Callable[[], dict]] = None,
                  service_name: str = "the-house",
-                 watch: Optional[Watchtower] = None) -> None:
+                 watch: Optional[Watchtower] = None,
+                 entity_price: Optional[float] = None) -> None:
         self.m = memory
         self.base_price = base_price
         self.service_name = service_name
@@ -92,6 +94,14 @@ class House:
         # HOUSE_LIVE_MONEY_OUT=1 + a real HOUSE_WALLET are set).
         self.wallet = wallet if wallet is not None else DryRunWallet(memory)
         self.journal = SettlementJournal(memory)
+        # /intel/entity base price (default: the config's dossier price).
+        self.entity_price = (INTEL_ENTITY_PRICE if entity_price is None
+                             else entity_price)
+        # The entity dossier (Room 5) — wired by build_app once desk/front/
+        # watch exist. serve_entity() needs it; without it a live entity read
+        # 404s (nothing to assemble). Kept as a plain attribute (no import
+        # cycle: dossier is assembled in the boundary layer).
+        self.dossier: Any = None
         # F3 upstream registry: the house can have a PRIMARY upstream (its own
         # memory-derived brief — always available, the product) and an optional
         # SECONDARY (the real ACP/external call in production). A compiled
@@ -265,21 +275,26 @@ class House:
             names.append("secondary")
         return names
 
-    def _run_work(self, payer: str) -> tuple[str, dict[str, Any]]:
+    def _run_work(self, payer: str,
+                  work_fn: Optional[Callable[[str], dict[str, Any]]] = None) -> tuple[str, dict[str, Any]]:
         """Run the work on the ACTIVE upstream. Returns (upstream_name, answer).
 
-        ``primary`` → ``self._do_work`` (the memory brief / injected work fn —
-        the same attribute tests monkeypatch). ``secondary`` → the injected
-        ``do_work_secondary`` (the real external call in production).
+        ``work_fn`` (default ``self._do_work``) is the primary serve body — the
+        memory brief / injected work fn / the entity dossier. ``secondary`` →
+        the injected ``do_work_secondary`` (the real external call in prod); a
+        per-route work_fn only applies to the primary (the secondary is a
+        drop-in for the primary's role).
         """
         name = self._active_upstream_name()
+        fn = work_fn if work_fn is not None else self._do_work
         if name == "secondary":
             if self._work_secondary is None:  # defensive: secondary unregistered
-                return "primary", self._do_work(payer)
+                return "primary", fn(payer)
             return name, self._work_secondary(payer)
-        return "primary", self._do_work(payer)
+        return "primary", fn(payer)
 
-    def _work_with_failover(self, payer: str) -> tuple[str, dict[str, Any]]:
+    def _work_with_failover(self, payer: str,
+                            work_fn: Optional[Callable[[str], dict[str, Any]]] = None) -> tuple[str, dict[str, Any]]:
         """Run the work, with real F3 failover: try the ACTIVE upstream; on
         failure, if a DIFFERENT upstream is registered, rotate to it and retry
         ONCE. Returns (upstream_name, answer). If the retried upstream also
@@ -292,13 +307,13 @@ class House:
         mistake, it escapes it.
         """
         try:
-            return self._run_work(payer)
+            return self._run_work(payer, work_fn)
         except Exception:
             if len(self._upstream_names()) > 1:
                 _from, to = self.rotate_upstream()
                 # Only retry if we actually moved to a different source.
                 if to != self._active_upstream_name() or _from != to:
-                    return self._run_work(payer)
+                    return self._run_work(payer, work_fn)
             raise
 
     # ---- retry budget (retry_budget=0): per-fingerprint failure memory ---- #
@@ -377,14 +392,20 @@ class House:
         # policy the house does not understand.
         return "serve"
 
+    # ================================================================== #
+    # The shared paid-serve pipeline (finding #9: both paid intel routes must
+    # run the SAME engine — trust pricing, refusals, watchtower, scar policy,
+    # job state, upstream/failover, money, envelope — not one thin wrapper
+    # and one dossier-only shortcut).
+    # ================================================================== #
     def serve_intel(self, payer: str, params: Optional[dict] = None) -> tuple[int, dict]:
-        """The paid serve. Returns (http_status, body).
+        """The paid ``/intel/quote`` serve. Returns (http_status, body).
 
-        The x402 middleware has already verified payment (payer known) and
-        will settle base AFTER we return a <400. We decide what the memory
-        owes / refuses / charges.
+        Thin wrapper over :meth:`_paid_serve` with the quote's defaults:
+        dedup ON (a repeat is served from cache at net $0 — the F2 promise)
+        and the memory brief as the work.
 
-        Order is load-bearing:
+        Order is load-bearing (see ``_paid_serve``):
           1. refusals (banned / watchtower / risky-prepay / scar policy) all
              happen BEFORE ``jobs.start`` — a refusal is a pure read and must
              never leave a job row the executor later "settles";
@@ -395,10 +416,62 @@ class House:
              a unique attempt number, so a repeat-repair never reuses (and
              resets) the original serve's settled job id.
         """
+        return self._paid_serve(payer, "/intel/quote", params, self.base_price,
+                                dedup=True, work=self._do_work)
+
+    def serve_entity(self, payer: str, entity: str) -> tuple[int, dict]:
+        """The paid ``/intel/entity/{name}`` serve (finding #9 parity).
+
+        The dossier is a LIVE cross-room read: it runs the FULL engine (trust
+        pricing by the payer's segment, banned/watchtower/scar-policy refusals,
+        a job row for F4 kill-resume, the scar_cited envelope) but with
+        **dedup OFF** — a live read is always re-read (the dossier changes as
+        the house's memory changes; caching a "dated snapshot" is a lie). The
+        house sells what it has: an entity it has never observed is a 404
+        BEFORE any work/job (uncharged).
+        """
+        if self.dossier is None:
+            # No cross-room assembler wired (test House): a bare room probe
+            # still answers "does the house remember this at all?"
+            found = (self.ledger.recall(entity) is not None
+                     or self.m.get_entity("provider", entity) is not None
+                     or self.m.get_entity("bond", entity) is not None
+                     or any(b.get("provider") == entity or b.get("buyer") == entity
+                            for b in self.m.list_entities("bond", limit=50)))
+        else:
+            found = self.dossier.build(entity)["found"]
+        if not found:
+            return 404, {"entity": entity, "found": False,
+                         "note": ("no record: the house has never seen this "
+                                  "wallet as a caller, provider, insurer, or "
+                                  "payer."), "uncharged": True}
+
+        def work(p: str) -> dict:
+            brief = self._default_work(p)
+            result = (self.dossier.build(entity)
+                      if self.dossier is not None else {"entity": entity,
+                                                        "found": True})
+            return {**result, **brief}
+
+        return self._paid_serve(payer, "/intel/entity", {"entity": entity},
+                                self.entity_price, dedup=False, work=work)
+
+    def _paid_serve(self, payer: str, route: str,
+                    params: Optional[dict], price: float,
+                    *, dedup: bool = True,
+                    work: Optional[Callable[[str], dict[str, Any]]] = None,
+                    ) -> tuple[int, dict]:
+        """The shared paid-serve pipeline (every paid intel route runs this).
+
+        ``price`` is the onchain base for THIS route (the settlement amount);
+        the trust-segment rebate is computed against it. ``dedup`` gates the
+        F2 repeat short-circuit (ON for /intel/quote, OFF for the live entity
+        read). ``work`` is the serve body (default: the memory brief).
+        """
         assert payer, "payer must be known (verified payload)"
         live = not self.m.disabled()
         params = params or {}
-        fp = fingerprint("/intel/quote", params)
+        fp = fingerprint(route, params)
 
         row = self.ledger.recall(payer)
         if row is None:
@@ -430,8 +503,9 @@ class House:
         # Served from cache at net $0 BEFORE any work — no re-compute, no
         # re-fail, no new job row, no trust/tx bump. The scar policy does not
         # govern repeats: the buyer owns this answer; hardening protects NEW
-        # work, not replay of purchased memory.
-        if live and self.dedup.is_repeat(row, fp):
+        # work, not replay of purchased memory. DEDUP-OFF routes (the entity
+        # read) skip this: a live read is always re-read.
+        if dedup and live and self.dedup.is_repeat(row, fp):
             return self._serve_repeat(payer, fp)
 
         # ---- FIX-2: scar policy cite (NEW work only; consult compiled
@@ -440,7 +514,7 @@ class House:
         switched_upstream = None  # set when a switch_upstream policy fires
         if live:
             try:
-                rule = self._route_rule("/intel/quote")
+                rule = self._route_rule(route)
                 if rule:
                     scar_cited = rule.get("source_scar") or rule.get("rule_id")
                     action = rule.get("action", "")
@@ -468,7 +542,7 @@ class House:
         # a risky wallet must carry a prepay credit covering the surcharge, or
         # the house refuses (settlement cancelled → uncharged).
         if segment == "risky":
-            surcharge = round(self.base_price * (mult - 1.0), 6)
+            surcharge = round(price * (mult - 1.0), 6)
             prepay = float(row.get("prepay_usdc", 0.0) or 0.0)
             if prepay < surcharge:
                 self._journal_refusal(payer, f"prepay required ${surcharge:g}")
@@ -488,29 +562,30 @@ class House:
         if live:
             try:
                 attempt = self._next_attempt(payer, fp)
-                jid = self.jobs.start(payer, "/intel/quote", fp,
+                jid = self.jobs.start(payer, route, fp,
                                       attempt=attempt, params=params)["id"]
             except Exception:  # noqa: BLE001
                 log.exception("job start failed (continuing serve)")
                 jid = None
 
         # ---- net price the house actually charges this request ------------
-        net = round(self.base_price * mult, 6)
+        net = round(price * mult, 6)
 
         # ---- the work (on the ACTIVE upstream; real F3 failover) ----------
+        work_fn = work if work is not None else self._default_work
         work_started_on = self._active_upstream_name()
         work_upstream = work_started_on
         try:
             if jid:
                 self.jobs.advance(jid, "serving", step="serve",
                                   payment_state="verified")
-            work_upstream, answer = self._work_with_failover(payer)
+            work_upstream, answer = self._work_with_failover(payer, work_fn)
         except Exception as exc:  # noqa: BLE001 - F3: serve failure → scar
             failure_class = _failure_class(exc)
             scar_id: Optional[str] = None
             if live:
                 try:
-                    scar_id = self.scars.record("/intel/quote", failure_class, str(exc))
+                    scar_id = self.scars.record(route, failure_class, str(exc))
                     self.note_failed_fp(fp)  # retry_budget spends this fingerprint
                     if jid:
                         self.jobs.advance(jid, "failed",
@@ -528,7 +603,7 @@ class House:
         standing = self.ledger.update(payer, "served", paid_usdc=net)
 
         # rebate owed = base (onchain settlement) − net (what we keep)
-        rebate = round(self.base_price - net, 6)
+        rebate = round(price - net, 6)
         rebate_tx = None
         if rebate > 0:
             try:
@@ -538,7 +613,11 @@ class House:
                 log.exception("rebate send failed payer=%s amount=%s", payer, rebate)
                 rebate_tx = None
 
-        self.dedup.mark_served(row, payer, fp, answer, price_usdc=self.base_price)
+        if dedup:
+            self.dedup.mark_served(row, payer, fp, answer, price_usdc=price)
+        # (dedup-off routes — the entity live read — write NO dedup state: no
+        # cache, no fp on the caller row, no hit counters. A live read is
+        # re-read, never replayed.)
 
         # re-read so standing reflects EVERY write in this request
         standing = self.ledger.recall(payer) or standing
@@ -553,7 +632,7 @@ class House:
             "standing": standing,
             "segment_price": net,
             "mult_applied": mult,
-            "paid_usdc": self.base_price,  # the onchain settlement (base)
+            "paid_usdc": price,  # the onchain settlement (base)
             "rebate_usdc": rebate,
             "rebate_tx": rebate_tx,
             "upstream": work_upstream,
