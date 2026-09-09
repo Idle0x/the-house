@@ -83,7 +83,7 @@ python -m venv .venv && source .venv/bin/activate
 pip install -e .            # or: pip install -r requirements.lock.txt
 
 # 2. run the tests (no credentials needed)
-pytest tests/ -q           # 59 passing (genuine tests, one per real contract)
+pytest tests/ -q           # 59 passing
 
 # 3. run the deletion gate (no credentials needed)
 .venv/bin/python deletion_test.py
@@ -338,7 +338,7 @@ removing it removes the product.
 ## Tests
 
 ```bash
-pytest tests/ -q        # 59 passing (genuine tests, one per real contract)
+pytest tests/ -q        # 59 passing
 ```
 
 - `test_pricing_enforced.py` — the money engine driven directly (no network,
@@ -353,63 +353,26 @@ pytest tests/ -q        # 59 passing (genuine tests, one per real contract)
   `0x…last4` on free routes; settlement tx hashes preserved for
   Basescan reconciliation).
 - `test_audit_fixes_p3b.py` — the claim state machine (a payout the wallet
-  can't send is booked `failed`, never `paid` — never imaginary money), the
-  auto-trigger pays every open bond on a defaulting provider, the operator
-  claim route is token-gated, hire decisions are journaled.
+  can't send is booked `failed`, never `paid`), the auto-trigger pays every
+  open bond on a defaulting provider, the operator claim route is
+  token-gated, hire decisions are journaled.
 - `test_audit_fixes_p4b.py` / `test_audit_fixes_p4c.py` — read-only GET
   audit/calibrate, bounded job state, unpolluted verdict feed, hermetic
   dedup cache, counterparty-id shape validation at the boundary.
 - `test_jobs.py` — F4 kill-resume + **no double charge**.
 - `test_bonds.py` — Room 2: premium from provider record, claim auto-payout
-  (incl. the finding-#21 "no phantom payout" state machine), remembered-claim
-  cap, deletion.
+  (incl. the "no phantom payout" state machine), remembered-claim cap,
+  deletion.
 - `test_watchtower.py` — Room 4: wash ring refused with the ring drawn,
   deletion re-admits, the side-effect-free `assess()`.
 - `test_front_office.py` — Room 3: memory-driven draft + scout terms.
 - `test_gallery.py` — Room 5: the dossier (cross-room, timestamped), the paid
-  `/intel/entity/:name` route (full engine, finding #9), the real intel body,
-  the gallery + journal.
+  `/intel/entity/:name` route (full engine), the real intel body, the gallery
+  + journal.
 - `test_scars.py` / `test_dedup.py` / `test_trust.py` / `test_memory.py` —
   each memory feature.
 - `test_seller.py` — the routes, incl. the landing page reading the collapse
   under `SIBYL_DISABLED=1`.
-
----
-
-## Audit remediation (Sep 9)
-
-An external full-codebase audit (`THE HOUSE — Full Codebase Audit Report`)
-found real integrity gaps. Every SEV-1/SEV-2 finding was remediated in code
-with a regression test per package (see the commit log):
-
-- **repeat short-circuits to cache BEFORE work** — a down upstream can no
-  longer 502 a cached answer; `compute_avoided` is only counted when compute
-  was actually avoided (`81a78ab`)
-- **refusals precede job creation** — a refusal is a pure read and never
-  leaves a job the executor could settle (`81a78ab`)
-- **segment re-derived at serve time** from live counters, one pure
-  function — the enforcement surface matches the docs (`81a78ab`)
-- **F3 actions act, not cosmetically**: `switch_upstream` rotates a persisted
-  upstream registry; `retry_budget=0` refuses a fingerprint the house
-  remembers as failed (`f48db2d`)
-- **`/intel/entity` runs the full engine** (trust pricing, refusals, scar
-  policy, job state, envelope) — the dossier is a live read, dedup OFF
-  (`93190c4`)
-- **prepay credits are fundable** (`POST /prepay/topup`) — the risky surcharge
-  is a path a buyer can walk, not a permanent refusal (`93190c4`)
-- **public surface masks addresses** (`0x…last4`) while the cold journal
-  keeps full addresses for Basescan reconciliation (`8cf15ba`)
-- **claims can be triggered from the product surface** (token-gated — money
-  out is never a public endpoint), and a claim the wallet can't send books
-  `failed`, never `paid` (`7e68016`)
-- **hire decisions are journaled** — a rendered ruling is hiring memory
-  (`7e68016`)
-
-Honest residual: live money-out (rebates, bond claim payouts) is
-**DryRun-safe-by-default** — designed and unit-verified, but on a live
-deployment it is real only when `HOUSE_LIVE_MONEY_OUT=1` + `HOUSE_WALLET`
-are set. The demo's money beats show the full decision + booking path with
-`dry:`-marked hashes.
 
 ---
 
