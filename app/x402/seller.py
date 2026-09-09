@@ -45,6 +45,7 @@ from core.redact import redact_text, redact_value
 from app.x402.landing import render_landing
 from app.x402.gallery import render_gallery
 from core.bonds import UnderwritingDesk
+from core.acp import ACPDelegator
 from core.config import (BOND_BASE_PREMIUM, INTEL_ENTITY_PRICE,
                          PREPAY_TOPUP_FEE, PREPAY_TOPUP_MAX, WATCH_SCREEN_PRICE)
 from core.dossier import Dossier
@@ -308,6 +309,13 @@ def build_app() -> FastAPI:
     # Room 3: the front office — memory-driven drafting/scouting over the
     # provider WARM rows the ACP delegator already writes (Gate 4 muscle).
     front = FrontOffice(memory)
+    # The ACP delegator is the ONCHAIN half of Room 3 — the Virtuals ×1.25
+    # "exercised" claim. It was previously reachable only by direct code/tests
+    # (audit SEV-2: ACPDelegator.delegate called nowhere in the product). It
+    # shells out to the `acp` CLI, so it is wired behind a capability token
+    # (money/agent out is never a public, camera-free endpoint) and degrades
+    # to a 503 when the CLI is absent.
+    acp = ACPDelegator(memory)
     house = House(memory, base_price=BASE_PRICE, service_name=SERVICE_NAME,
                   wallet=wallet_obj,
                   wallet_check=_acp_wallet_check if live_money_out else None,
@@ -474,6 +482,7 @@ def build_app() -> FastAPI:
     app.state.desk = desk
     app.state.watch = watch
     app.state.front = front
+    app.state.acp = acp
     app.state.dossier = dossier
 
     # ---- free routes (never gated) ---------------------------------------
@@ -804,6 +813,20 @@ def build_app() -> FastAPI:
         if payer is None:
             return JSONResponse(status_code=502,
                                  content={"error": "payer unknown after settlement"})
+        # The funding-graph writer (audit SEV-2: nothing ever wrote funded_by).
+        # A screen may declare the root that funds the wallet; the house
+        # remembers it, so the sybil/self-funding rules fire across sessions.
+        raw_funded = body.get("funded_by")
+        if raw_funded:
+            funded_by = require_wallet(raw_funded, "funded_by")
+            if funded_by is None:
+                return JSONResponse(status_code=400,
+                                     content={"error": "funded_by must be a "
+                                                       "0x-prefixed 40-char "
+                                                       "address"})
+        else:
+            funded_by = ""
+        watch.note_funding(wallet, funded_by)
         return {"house": SERVICE_NAME, **watch.screen(wallet)}
 
     # ---- paid handler (only reachable after x402 verification) ------------
@@ -902,6 +925,85 @@ def build_app() -> FastAPI:
                 **decision,
             })
         return {"house": SERVICE_NAME, "payer_last6": payer[-6:], **decision}
+
+    # ---- operator trigger (capability-gated) ------------------------------
+    @app.post("/scout/delegate", include_in_schema=False)
+    async def route_scout_delegate(request: Request):
+        """Room 3's onchain half: actually HIRE the provider via ACP.
+
+        The audit (SEV-2) found ``ACPDelegator.delegate`` — the Virtuals ×1.25
+        "exercised" claim — was called NOWHERE in the product; live ACP jobs
+        existed only as manual Gate-4 runs. This route is the wiring. It is
+        capability-gated (``HOUSE_COMPILE_TOKEN``; open only in tokenless
+        local/test) because it shells out to the ``acp`` CLI and can move
+        escrow — an agent/money-out act, never a public, camera-free endpoint.
+
+        Terms are set by the house's REMEMBERED provider record
+        (``front.decision`` / ``acp.terms_from_row``): a risky provider is
+        skipped BEFORE any onchain call (no job, no escrow); proven/unknown
+        proceed with the memory-priced evaluator. Deletion (SIBYL_DISABLED) →
+        every provider is "unknown" at standard terms → the house hires blind,
+        exactly the room's before/after.
+        """
+        token = os.getenv("HOUSE_COMPILE_TOKEN", "").strip()
+        if token:
+            given = request.headers.get("x-house-capability", "")
+            if given != token:
+                return JSONResponse(status_code=403,
+                                     content={"error": "capability token required"})
+        body = await request.json()
+        provider = require_wallet(body.get("provider"), "provider")
+        if provider is None:
+            return JSONResponse(status_code=400,
+                                 content={"error": "provider must be a "
+                                                   "0x-prefixed 40-char "
+                                                   "address"})
+        offering = str(body.get("offering") or "").strip()
+        if not offering:
+            return JSONResponse(status_code=400,
+                                 content={"error": "offering is required"})
+        requirements = body.get("requirements") or {"offering": offering}
+        if not isinstance(requirements, dict):
+            return JSONResponse(status_code=400,
+                                 content={"error": "requirements must be an object"})
+
+        front: FrontOffice = request.app.state.front  # type: ignore[assignment]
+        acp = request.app.state.acp  # type: ignore[assignment]
+        decision = front.decision(provider)
+        if decision["refused"]:
+            # A risky provider is skipped before any onchain call — the house
+            # does not hire it. The ruling is journaled (it is hiring memory).
+            front.note_hire(provider, outcome="refused")
+            return JSONResponse(status_code=403, content={
+                "house": SERVICE_NAME,
+                "skipped": True,
+                "reason": decision["reason"],
+                "uncharged": True,
+                **decision,
+            })
+        try:
+            receipt = acp.delegate(provider, offering, requirements)
+        except FileNotFoundError:
+            return JSONResponse(status_code=503, content={
+                "house": SERVICE_NAME,
+                "error": "acp CLI not available — delegation degraded (no "
+                          "onchain job was created)"})
+        except Exception as exc:  # noqa: BLE001 - surface the honest failure
+            return JSONResponse(status_code=502, content={
+                "house": SERVICE_NAME,
+                "error": f"delegation failed: {exc}"})
+        # The delegation is hiring memory: the ruling + the onchain receipt
+        # (job id, funded amount, completion) are journaled on the COLD trail.
+        front.note_hire(provider, outcome="drafted")
+        acp.m.write_event(
+            f"acp delegate → {provider} offering={offering} "
+            f"job={receipt.get('job_id')} funded=${receipt.get('funded_usdc', 0):g} "
+            f"completion={receipt.get('completion')}",
+            kind="paid")
+        return {"house": SERVICE_NAME,
+                "provider_last6": provider[-6:],
+                "decision": decision,
+                **receipt}
 
     # ---- paid handler (only reachable after x402 verification) ------------
     @app.get("/intel/quote")

@@ -494,9 +494,22 @@ class House:
         # A caller the tower calls ABORT (self-pay, funding-cluster sybil,
         # factory) is refused BEFORE settlement → genuinely uncharged, and
         # the refusal + ring are published on the verdict feed.
+        #
+        # The refusal is also a CALLER-ATTRIBUTABLE failure (spec
+        # trust-model.md: D_CALLER_FAULT = "failure attributable to caller"):
+        # the caller's own behavior is why the house declined them. Booking
+        # it in the trust ledger is what lets a bad actor become risky/banned
+        # through REAL request behavior — the audit found trust could only
+        # ever move UP (+3/serve) from the product surface; a burner that
+        # tries to launder now burns trust with every refused attempt.
         if self.watch is not None:
             refusal = self.watch.consult(payer)
             if refusal is not None:
+                if live:
+                    try:
+                        self.ledger.update(payer, "caller_fault")
+                    except Exception:  # noqa: BLE001 - trust never breaks a refusal
+                        log.exception("caller_fault booking failed")
                 return 403, refusal   # consult already journals + publishes
 
         # ---- F2: is this a repeat (fp the caller already paid for)? ------

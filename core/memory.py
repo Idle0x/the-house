@@ -37,10 +37,11 @@ from sibyl_memory_client.exceptions import NotFoundError
 # Taxonomy (audit finding 16): `refund` (trust outcome) and `refunded`
 # (job phase) are both kept for backward compat with written events;
 # `repeat`, `prepay` and `refuse` cover events that previously fell through
-# as `paid`/untyped or never existed.
+# as `paid`/untyped or never existed. `funding` is the funding-graph edge
+# written by the watchtower (the `funded_by` writer, audit SEV-2).
 KINDS = ("served", "caller_fault", "refund", "paid", "failure", "job",
          "audit", "refunded", "bond", "claim", "screen", "refuse",
-         "repeat", "prepay")
+         "repeat", "prepay", "funding")
 
 DEFAULT_DB = Path("~/.sibyl-memory/memory.db").expanduser()
 
