@@ -218,6 +218,42 @@ class Watchtower:
         ts[key] = (ts.get(key, []) + [time.time()])[-20:]
         self.m.set_state("watch_serves", ts)
 
+    def note_funding(self, addr: str, funded_by: str) -> dict:
+        """Record who funds this caller — the funding-graph edge (Room 4).
+
+        The audit (SEV-2) found nothing in the product ever WROTE
+        ``funded_by`` — only tests seeded it — so the watchtower's
+        funding-cluster sybil rule (``_rule_sybil``) and the self-funding
+        branch of ``self-pay`` could never fire on live traffic. This is the
+        writer. A paid ``/watch/screen`` may declare the root that funds the
+        wallet, and the house REMEMBERS it on the caller row. A ring is
+        invisible in one session (spec 08-ELEVATION Room 4), so the edge is
+        declared on a screen and then honored by the serve path across
+        sessions — the cross-session funding memory the room is built on.
+
+        ``funded_by`` is stored lowercased (the rules compare lowercased). An
+        empty declaration is a no-op that still (re)creates the row so the
+        caller is observed as having been screened.
+        """
+        if self.m.disabled():
+            return {}
+        funded_by = (funded_by or "").strip().lower()
+        # Upsert (merge) so an existing caller row keeps every field and only
+        # gains/updates funded_by + last_seen. A fresh row is created for a
+        # wallet the house has never served — the rules only need funded_by
+        # (the cluster scan + the self-funding check read it; cold/metronome
+        # default to 0/absent → CLEAR).
+        row = self.m.upsert_entity("caller", addr, {
+            "address": addr,
+            "funded_by": funded_by,
+            "last_seen": time.time(),
+        })
+        if funded_by:
+            self.m.write_event(
+                f"funding graph: {_short(addr)} funded by {_short(funded_by)}",
+                kind="funding")
+        return row
+
     def consult(self, payer: str) -> Optional[dict[str, Any]]:
         """Own-serve-path check: record the arrival, return the refusal body
         when the tower says ABORT. None → serve.

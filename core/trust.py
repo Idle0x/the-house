@@ -183,7 +183,6 @@ class TrustLedger:
         self.m.write_event(f"{addr} {outcome} (Δ{delta:+d})", kind=outcome)
         return row
 
-    # ------------------------------------------------------------------ #
     def note_dedup(self, addr: str) -> dict:
         """Increment the per-caller dedup_hits counter (F2 money beat).
 
