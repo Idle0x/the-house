@@ -129,6 +129,28 @@ class TrustLedger:
         mult = C.PRICE_MULT.get(seg, 1.0)
         return (seg, 0.0 if mult is None else mult)
 
+    def credit_prepay(self, addr: str, usdc: float) -> dict:
+        """Add to the caller's prepay credit balance.
+
+        The audit found ``prepay_usdc`` was only ever DEBITED (the risky
+        surcharge + the ``prepay_required`` scar policy), never credited — so
+        a risky wallet could never actually satisfy the surcharge and the
+        ``Decision.prepay`` enforcement was a permanent refusal, not a path
+        the buyer could walk. This is the funding half: a buyer pays the house
+        (onchain) and the credit lands here, spendable against a surcharge.
+        """
+        usdc = round(float(usdc), 6)
+        if usdc <= 0:
+            raise ValueError("prepay credit must be positive")
+        row = self._ensure(addr)
+        row["prepay_usdc"] = round(float(row.get("prepay_usdc", 0.0) or 0.0)
+                                   + usdc, 6)
+        row["last_seen"] = time.time()
+        self.m.set_entity("caller", addr, row)
+        self.m.write_event(f"prepay credit {addr} +{usdc:g}USDC "
+                           f"(balance {row['prepay_usdc']:g})", kind="prepay")
+        return row
+
     def update(self, addr: str, outcome: str, *, paid_usdc: float = 0.0) -> dict:
         """Apply an outcome to the caller's row. outcome in the KINDS set.
 

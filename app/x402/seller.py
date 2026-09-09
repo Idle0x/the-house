@@ -45,7 +45,8 @@ from core.redact import redact_text, redact_value
 from app.x402.landing import render_landing
 from app.x402.gallery import render_gallery
 from core.bonds import UnderwritingDesk
-from core.config import BOND_BASE_PREMIUM, INTEL_ENTITY_PRICE, WATCH_SCREEN_PRICE
+from core.config import (BOND_BASE_PREMIUM, INTEL_ENTITY_PRICE,
+                         PREPAY_TOPUP_FEE, PREPAY_TOPUP_MAX, WATCH_SCREEN_PRICE)
 from core.dossier import Dossier
 from core.house import House
 from core.memory import HouseMemory
@@ -327,6 +328,10 @@ def build_app() -> FastAPI:
     # payer). Deletion → "no record": the house only sells what it remembers.
     dossier = Dossier(memory, desk=desk, front=front, watch=watch,
                       journal=house.journal)
+    # The engine needs the cross-room assembler for the paid /intel/entity
+    # live read (finding #9: the entity route now runs the FULL engine, not a
+    # dossier-only shortcut).
+    house.dossier = dossier
 
     routes: dict[str, RouteConfig] = {
         "/intel/quote": RouteConfig(
@@ -432,6 +437,25 @@ def build_app() -> FastAPI:
             tags=["intel", "entity", "dossier", "memory", "x402"],
             mime_type="application/json",
         ),
+        # Trust: the prepay top-up — the funding half of the risky-surcharge
+        # path. The onchain quote is the HANDLING FEE (the price of the credit
+        # itself, in USDC, is requested in the body); the credit lands on the
+        # payer's caller row, spendable against the next risky serve.
+        "POST /prepay/topup": RouteConfig(
+            accepts=PaymentOption(
+                scheme="exact",
+                pay_to=_house_wallet(),
+                price=PREPAY_TOPUP_FEE,
+                network=NETWORK,
+                max_timeout_seconds=600,
+            ),
+            description="Top up your prepay credit so the house will serve a "
+                        "risky wallet. Pays the handling fee onchain; the "
+                        "requested USDC lands as a spendable credit.",
+            service_name=SERVICE_NAME,
+            tags=["trust", "prepay", "x402"],
+            mime_type="application/json",
+        ),
     }
 
     app = FastAPI(title="THE HOUSE", version="0.2.0", lifespan=lifespan)
@@ -464,7 +488,8 @@ def build_app() -> FastAPI:
                          "The house assumes nothing.",
             "memory": "disabled" if memory.disabled() else "live",
             "paid": ["/intel/quote", "GET /intel/entity/:name", "POST /bond/quote",
-                     "POST /watch/screen", "POST /scout/report", "POST /scout/hire"],
+                     "POST /watch/screen", "POST /scout/report", "POST /scout/hire",
+                     "POST /prepay/topup"],
             "free": ["/house/ledger", "/house/jobs", "/house/audit",
                      "/house/calibrate", "/house/bonds", "/house/watch",
                      "/house/front", "/house/journal", "/gallery"],
@@ -745,6 +770,45 @@ def build_app() -> FastAPI:
         return {"house": SERVICE_NAME, **watch.screen(wallet)}
 
     # ---- paid handler (only reachable after x402 verification) ------------
+    @app.post("/prepay/topup")
+    async def route_prepay_topup(request: Request):
+        """Trust: fund the prepay credit a risky wallet needs to be served.
+
+        The x402 middleware settles the HANDLING FEE onchain (PREPAY_TOPUP_FEE).
+        The buyer also states how much credit to add (``amount``) in the body;
+        the house caps it at PREPAY_TOPUP_MAX and credits it to the PAYER's
+        caller row — spendable against the next risky serve's surcharge. A 400
+        (bad amount) cancels settlement → the buyer is uncharged.
+        """
+        house_: House = request.app.state.house  # type: ignore[attr-defined]
+        body = await request.json()
+        try:
+            amount = float(body.get("amount"))
+        except (TypeError, ValueError):
+            return JSONResponse(status_code=400,
+                                 content={"error": "amount must be a number (USDC)"})
+        if amount <= 0:
+            return JSONResponse(status_code=400,
+                                 content={"error": "amount must be positive"})
+        if amount > PREPAY_TOPUP_MAX:
+            return JSONResponse(status_code=400,
+                                 content={"error": f"amount exceeds the {PREPAY_TOPUP_MAX:g} USDC top-up cap"})
+        payer = extract_payer(getattr(request.state, "payment_payload", None))
+        if payer is None:
+            return JSONResponse(status_code=502,
+                                 content={"error": "payer unknown after settlement"})
+        # Credit lands on the payer's OWN caller row (the wallet that will be
+        # served), not on an arbitrary wallet — a buyer funds itself.
+        row = house_.ledger.credit_prepay(payer, amount)
+        segment, mult = house_.ledger.segment(row)
+        return {"house": SERVICE_NAME,
+                "credited_usdc": amount,
+                "fee_usdc": PREPAY_TOPUP_FEE,
+                "prepay_on_file": round(float(row.get("prepay_usdc", 0.0) or 0.0), 6),
+                "segment": segment,
+                "price_mult": mult}
+
+    # ---- paid handler (only reachable after x402 verification) ------------
     @app.post("/scout/report")
     async def route_scout_report(request: Request):
         """Room 3: sell a scout report. Paid (report base quoted onchain).
@@ -839,18 +903,14 @@ def build_app() -> FastAPI:
             # for a dossier it cannot attribute to a payer).
             return JSONResponse(
                 status_code=502, content={"error": "payer unknown after settlement"})
-        dossier: Dossier = request.app.state.dossier  # type: ignore[attr-defined]
-        result = dossier.build(entity)
-        if not result["found"]:
-            # The house has no record of this entity. 404 cancels settlement
-            # (uncharged) — honesty: we sell the memory we have, nothing more.
-            return JSONResponse(status_code=404, content={
-                "entity": entity,
-                "found": False,
-                "note": result["note"],
-                "uncharged": True,
-            })
-        return {"house": SERVICE_NAME, "payer_last6": payer[-6:], **result}
+        # Finding #9 parity: the entity dossier runs the FULL engine (trust
+        # pricing, refusals, watchtower, scar policy, job state, envelope) —
+        # not a dossier-only shortcut. A 404 / refusal comes back uncharged.
+        house_: House = request.app.state.house  # type: ignore[attr-defined]
+        status, body = house_.serve_entity(payer, entity)
+        if status >= 400:
+            return JSONResponse(status_code=status, content=body)
+        return {"house": SERVICE_NAME, "payer_last6": payer[-6:], **body}
 
     app.add_middleware(
         make_journal_middleware(house.journal),
