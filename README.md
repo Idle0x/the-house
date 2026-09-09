@@ -83,7 +83,7 @@ python -m venv .venv && source .venv/bin/activate
 pip install -e .            # or: pip install -r requirements.lock.txt
 
 # 2. run the tests (no credentials needed)
-pytest tests/ -q           # 202 passing
+pytest tests/ -q           # 59 passing (genuine tests, one per real contract)
 
 # 3. run the deletion gate (no credentials needed)
 .venv/bin/python deletion_test.py
@@ -338,7 +338,7 @@ removing it removes the product.
 ## Tests
 
 ```bash
-pytest tests/ -q        # 202 passing
+pytest tests/ -q        # 59 passing (genuine tests, one per real contract)
 ```
 
 - `test_pricing_enforced.py` — the money engine driven directly (no network,
