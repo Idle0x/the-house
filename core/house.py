@@ -74,6 +74,7 @@ class House:
                  base_price: float,
                  wallet: Optional[HouseWallet] = None,
                  do_work: Optional[Callable[[str], dict[str, Any]]] = None,
+                 do_work_secondary: Optional[Callable[[str], dict[str, Any]]] = None,
                  wallet_check: Optional[Callable[[], dict]] = None,
                  service_name: str = "the-house",
                  watch: Optional[Watchtower] = None) -> None:
@@ -91,7 +92,18 @@ class House:
         # HOUSE_LIVE_MONEY_OUT=1 + a real HOUSE_WALLET are set).
         self.wallet = wallet if wallet is not None else DryRunWallet(memory)
         self.journal = SettlementJournal(memory)
-        self._do_work = do_work if do_work is not None else self._default_work
+        # F3 upstream registry: the house can have a PRIMARY upstream (its own
+        # memory-derived brief — always available, the product) and an optional
+        # SECONDARY (the real ACP/external call in production). A compiled
+        # ``switch_upstream`` scar policy rotates which one the serve path uses;
+        # the choice is persisted in WARM state so a fresh session inherits it.
+        self._work_primary = do_work if do_work is not None else self._default_work
+        self._work_secondary = do_work_secondary
+        # The serve path calls ``self._do_work`` for the primary upstream (the
+        # memory brief / injected work fn — tests monkeypatch this attr) and
+        # ``self._work_secondary`` for the secondary (the real external call in
+        # production). rotate_upstream() toggles which one _run_work uses.
+        self._do_work = self._work_primary
         self._wallet_check = wallet_check
         self.watch = watch
         self._executor: Optional[JobExecutor] = None
@@ -210,6 +222,112 @@ class House:
                 "pruned": pruned, "audit": audit_status}
 
     # ------------------------------------------------------------------ #
+    # F3 — real upstream switching + retry budget (audit: the actions were
+    # cosmetic — applied as plain "serve"). Now they ACT: a compiled
+    # switch_upstream rotates the active upstream; a compiled retry_budget=0
+    # refuses a fingerprint that has already failed this session.
+    # ------------------------------------------------------------------ #
+    def _active_upstream_name(self) -> str:
+        """Which upstream the serve path currently uses (persisted, so a fresh
+        session inherits the rotation — F3 "the policy is remembered")."""
+        if self.m.disabled():
+            return "primary"
+        stored = self.m.get_state("active_upstream") or {}
+        name = stored.get("name")
+        if name in self._upstream_names():
+            return name
+        return "primary"
+
+    def _set_active_upstream(self, name: str) -> None:
+        if name in self._upstream_names() and not self.m.disabled():
+            self.m.set_state("active_upstream", {"name": name, "since": time.time()})
+
+    def rotate_upstream(self) -> tuple[str, str]:
+        """Switch to a DIFFERENT upstream than the active one (wrap around).
+        Returns (from_name, to_name). With only one upstream, this is an
+        honest no-op (from == to) — the house cannot switch to nothing.
+
+        ``secondary`` is the production ACP/external call (``do_work_secondary``);
+        ``primary`` is the always-available memory brief (``do_work``). When a
+        secondary is registered the registry is ["primary", "secondary"].
+        """
+        cur = self._active_upstream_name()
+        names = self._upstream_names()
+        if len(names) <= 1:
+            return cur, cur
+        nxt = names[(names.index(cur) + 1) % len(names)]
+        self._set_active_upstream(nxt)
+        return cur, nxt
+
+    def _upstream_names(self) -> list[str]:
+        names = ["primary"]
+        if self._work_secondary is not None:
+            names.append("secondary")
+        return names
+
+    def _run_work(self, payer: str) -> tuple[str, dict[str, Any]]:
+        """Run the work on the ACTIVE upstream. Returns (upstream_name, answer).
+
+        ``primary`` → ``self._do_work`` (the memory brief / injected work fn —
+        the same attribute tests monkeypatch). ``secondary`` → the injected
+        ``do_work_secondary`` (the real external call in production).
+        """
+        name = self._active_upstream_name()
+        if name == "secondary":
+            if self._work_secondary is None:  # defensive: secondary unregistered
+                return "primary", self._do_work(payer)
+            return name, self._work_secondary(payer)
+        return "primary", self._do_work(payer)
+
+    def _work_with_failover(self, payer: str) -> tuple[str, dict[str, Any]]:
+        """Run the work, with real F3 failover: try the ACTIVE upstream; on
+        failure, if a DIFFERENT upstream is registered, rotate to it and retry
+        ONCE. Returns (upstream_name, answer). If the retried upstream also
+        fails (or there is no second upstream), the exception propagates to the
+        serve path, which books a scar + 502.
+
+        This is what makes ``switch_upstream`` a genuine fix rather than a
+        persisted flip: the house actively leaves a source that is failing and
+        lands on one that isn't — the fresh session does not re-make the
+        mistake, it escapes it.
+        """
+        try:
+            return self._run_work(payer)
+        except Exception:
+            if len(self._upstream_names()) > 1:
+                _from, to = self.rotate_upstream()
+                # Only retry if we actually moved to a different source.
+                if to != self._active_upstream_name() or _from != to:
+                    return self._run_work(payer)
+            raise
+
+    # ---- retry budget (retry_budget=0): per-fingerprint failure memory ---- #
+    def note_failed_fp(self, fp: str) -> None:
+        """Record that a fingerprint just failed (retry budget spends it)."""
+        if self.m.disabled():
+            return
+        ts = self.m.get_state("failed_fps") or {}
+        ts[fp] = time.time()
+        self.m.set_state("failed_fps", ts)
+
+    def fp_has_failed(self, fp: str) -> bool:
+        if self.m.disabled():
+            return False
+        ts = self.m.get_state("failed_fps") or {}
+        return fp in ts
+
+    def heal_fp(self, fp: str) -> None:
+        """Remove a fingerprint from the failed set after a SUCCESSFUL serve —
+        the route the house remembered as broken is now healthy, so
+        ``retry_budget=0`` must not keep refusing it."""
+        if self.m.disabled():
+            return
+        ts = self.m.get_state("failed_fps") or {}
+        if fp in ts:
+            del ts[fp]
+            self.m.set_state("failed_fps", ts)
+
+    # ------------------------------------------------------------------ #
     def _route_rule(self, route: str) -> Optional[dict]:
         """FIX-2: first active (unexpired) compiled policy rule for `route`."""
         now = time.time()
@@ -219,9 +337,21 @@ class House:
                 return rule
         return None
 
-    def _apply_scar_action(self, payer: str, row: dict, action: str) -> str:
+    def _apply_scar_action(self, payer: str, row: dict, action: str,
+                           fp: str) -> str:
         """FIX-2: apply a compiled rule's single action to this serve.
-        Returns "refuse" (hardening blocks the serve) or "serve"."""
+        Returns "refuse" (hardening blocks the serve) or "serve".
+
+        F3 (audit: the non-refusal actions were COSMETIC — they returned plain
+        "serve" and changed nothing). Now they act:
+          * ``switch_upstream`` → rotate to a different upstream BEFORE the work
+            (a real handoff; persisted, so the fresh session inherits it). With
+            only one upstream it is an honest no-op (no second source exists).
+          * ``retry_budget=0`` → if THIS fingerprint already failed this
+            session, refuse (no retry) instead of burning the buyer's payment
+            again on a route the house remembers as broken.
+        Both still "cite the scar" via the serve path's ``scar_cited``.
+        """
         if action == "prepay_required":
             # The route has a known money-failure mode: demand full prepay.
             prepay = float(row.get("prepay_usdc", 0.0) or 0.0)
@@ -232,7 +362,19 @@ class House:
             return "refuse"
         if action == "refuse_until":
             return "refuse"   # active window already checked in _route_rule
-        # retry_budget=0 / switch_upstream → serve under hardened policy
+        if action == "switch_upstream":
+            # A real handoff: move the work to the other upstream, then serve
+            # there. The house does NOT naively re-hit the source that failed.
+            self.rotate_upstream()
+            return "serve"
+        if action == "retry_budget=0":
+            # The route has a known failure mode and this fingerprint already
+            # failed once: no retry — refuse before doing the work again.
+            if self.fp_has_failed(fp):
+                return "refuse"
+            return "serve"
+        # Unknown action → fail open (serve) rather than fail closed on a
+        # policy the house does not understand.
         return "serve"
 
     def serve_intel(self, payer: str, params: Optional[dict] = None) -> tuple[int, dict]:
@@ -295,13 +437,19 @@ class House:
         # ---- FIX-2: scar policy cite (NEW work only; consult compiled
         #      policy on read) ---------------------------------------------
         scar_cited = None
+        switched_upstream = None  # set when a switch_upstream policy fires
         if live:
             try:
                 rule = self._route_rule("/intel/quote")
                 if rule:
                     scar_cited = rule.get("source_scar") or rule.get("rule_id")
                     action = rule.get("action", "")
-                    if self._apply_scar_action(payer, row, action) == "refuse":
+                    before = self._active_upstream_name()
+                    decision = self._apply_scar_action(payer, row, action, fp)
+                    after = self._active_upstream_name()
+                    if action == "switch_upstream" and after != before:
+                        switched_upstream = {"from": before, "to": after}
+                    if decision == "refuse":
                         self._journal_refusal(payer, f"policy {action}")
                         return 403, {"error": "the house declines this wallet",
                                      "house_refused": f"policy {action}",
@@ -349,25 +497,32 @@ class House:
         # ---- net price the house actually charges this request ------------
         net = round(self.base_price * mult, 6)
 
-        # ---- the work -----------------------------------------------------
+        # ---- the work (on the ACTIVE upstream; real F3 failover) ----------
+        work_started_on = self._active_upstream_name()
+        work_upstream = work_started_on
         try:
             if jid:
                 self.jobs.advance(jid, "serving", step="serve",
                                   payment_state="verified")
-            answer = self._do_work(payer)
+            work_upstream, answer = self._work_with_failover(payer)
         except Exception as exc:  # noqa: BLE001 - F3: serve failure → scar
             failure_class = _failure_class(exc)
             scar_id: Optional[str] = None
             if live:
                 try:
                     scar_id = self.scars.record("/intel/quote", failure_class, str(exc))
+                    self.note_failed_fp(fp)  # retry_budget spends this fingerprint
                     if jid:
                         self.jobs.advance(jid, "failed",
                                           step=f"serve failed: {failure_class}")
                 except Exception:  # noqa: BLE001
                     log.exception("scar recording failed")
             return 502, {"error": "serve failed", "failure_class": failure_class,
-                         "scar_id": scar_id}
+                         "scar_id": scar_id, "upstream": work_upstream}
+
+        # The work succeeded on the active upstream → heal the fingerprint so a
+        # later retry_budget=0 consult does not refuse a now-healthy request.
+        self.heal_fp(fp)
 
         # ---- book it ------------------------------------------------------
         standing = self.ledger.update(payer, "served", paid_usdc=net)
@@ -401,6 +556,7 @@ class House:
             "paid_usdc": self.base_price,  # the onchain settlement (base)
             "rebate_usdc": rebate,
             "rebate_tx": rebate_tx,
+            "upstream": work_upstream,
             "house": {"segment": standing.get("segment"),
                       "trust_score": standing.get("trust_score"),
                       "repeat_of": None},
@@ -408,6 +564,13 @@ class House:
         body.update(answer)
         if scar_cited:
             body["scar_cited"] = scar_cited
+        if switched_upstream is None and work_upstream != work_started_on:
+            # The work started on one upstream and finished on another — an
+            # in-flight failover (the active source failed mid-serve and the
+            # house escaped it). Surface it the same way as a policy switch.
+            switched_upstream = {"from": work_started_on, "to": work_upstream}
+        if switched_upstream:
+            body["switched_upstream"] = switched_upstream
         return 200, body
 
     def _next_attempt(self, payer: str, fp: str) -> int:

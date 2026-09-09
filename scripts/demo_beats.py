@@ -53,6 +53,17 @@ def fresh_house(db: str) -> House:
     return House(m, base_price=BASE)
 
 
+def _flaky_upstream(payer: str) -> dict:
+    """The 'down' primary — the fault the house is learning from."""
+    raise TimeoutError("5xx upstream timeout")
+
+
+def _healthy_upstream(payer: str) -> dict:
+    """The secondary source the house switches TO (healthy by construction)."""
+    return {"intel": "brief assembled on the secondary source",
+            "src": "secondary"}
+
+
 # ====================================================================== #
 # BEAT 2 — THE RECALL (make-or-break; one continuous take on camera)
 # ====================================================================== #
@@ -136,43 +147,54 @@ def beat_badactor(db: str) -> None:
 
 
 # ====================================================================== #
-# BEAT 4 — THE SCAR (failure compiles to policy; fresh session cites it)
+# BEAT 4 — THE SCAR (failure compiles to a REAL switch the fresh session keeps)
 # ====================================================================== #
 def beat_scar(db: str) -> None:
-    hr("BEAT 4 — THE SCAR: failure compiles into policy the house cites")
+    hr("BEAT 4 — THE SCAR: failure compiles into a switch the house keeps")
     m = HouseMemory(db)
 
-    def flaky(payer: str) -> dict:
-        raise TimeoutError("5xx upstream timeout")   # a scripted fault, not luck
-
-    house = House(m, base_price=BASE, do_work=flaky)
-    print("[session A] upstream times out 3x on the same route (fault injector)")
-    scar_ids = []
+    # Session A: ONE source (the primary) that is down. No secondary yet.
+    house = House(m, base_price=BASE, do_work=_flaky_upstream)
+    print("[session A] the primary upstream times out 3x on the same route")
     for i in range(3):
         st, body = house.serve_intel(WALLET, {"q": "timed-out"})
         assert st == 502, (st, body)
-        scar_ids.append(body.get("scar_id"))
         print(f"    -> HTTP 502  failure_class={body['failure_class']}  "
               f"scar={body['scar_id']}")
-    # the third failure crosses the compile threshold → a policy rule
+    # The third failure crosses the compile threshold -> a policy rule.
     house.scars.compile()
     rules = house.scars.active_rules()
     print(f"    policy compiled: {len(rules)} active rule(s)")
     assert rules, "3 same-class failures must compile a policy rule"
     action = next(iter(rules.values())).get("action")
-    print(f"    rule action: {action} (source scar cited by the next session)")
+    assert action == "switch_upstream", action
+    print(f"    rule action: {action} — 'leave the source that is failing'")
 
-    # --- FRESH session, SAME memory, healthy work: it reads the policy ---
-    print("\n[KILL] fresh session, same memory file, upstream now healthy…")
-    house2 = House(HouseMemory(db), base_price=BASE)
+    # --- FRESH session, SAME memory. A second (healthy) source is now
+    #     available. The fresh session reads the remembered policy BEFORE it
+    #     does any work and proactively switches away from the flaky primary.
+    print("\n[KILL] fresh session, same memory — a healthy secondary is up…")
+    house2 = House(HouseMemory(db), base_price=BASE,
+                   do_work=_flaky_upstream, do_work_secondary=_healthy_upstream)
+    print(f"    fresh session starts on upstream: "
+          f"{house2._active_upstream_name()}")
     st, body = house2.serve_intel(WALLET, {"q": "timed-out"})
-    print(f"    -> HTTP {st}  scar_cited={body.get('scar_cited')}")
-    # A compiled rule is consulted on read; the hardened action applies and
-    # the response cites the scar id. (A timeout-class policy serves under the
-    # hardened policy; a refund-class one would be prepay_required → refused.)
+    print(f"    -> HTTP {st}  upstream={body.get('upstream')}  "
+          f"switched={body.get('switched_upstream')}  "
+          f"scar_cited={body.get('scar_cited')}")
+    # The genuine F3: the fresh session does NOT re-hit the flaky primary.
+    # It reads the remembered switch_upstream policy, leaves the failing
+    # source, and serves from the healthy secondary — citing the scar.
     assert st == 200 and body.get("scar_cited"), (st, body)
-    print("\n    SCAR OK: the house re-made the policy from its own skin and")
-    print("    cites the scar — it did NOT re-learn from zero on this boot.")
+    assert body.get("upstream") == "secondary", body
+    assert body.get("switched_upstream"), "the switch must be surfaced"
+    assert body.get("src") == "secondary", "it served from the secondary"
+    # And the switch is REMEMBERED: the active upstream is now the secondary.
+    assert house2._active_upstream_name() == "secondary"
+    print("\n    SCAR OK: the house compiled a switch from its own failures,")
+    print("    and the fresh session KEEPT it — it escaped the source that was")
+    print("    failing instead of re-mistaking it. (Wipe the scars and it goes")
+    print("    back to hitting the flaky primary on the next failure.)")
 
 
 # ====================================================================== #
