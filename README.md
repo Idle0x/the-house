@@ -83,7 +83,7 @@ python -m venv .venv && source .venv/bin/activate
 pip install -e .            # or: pip install -r requirements.lock.txt
 
 # 2. run the tests (no credentials needed)
-pytest tests/ -q           # 148 passing
+pytest tests/ -q           # 202 passing
 
 # 3. run the deletion gate (no credentials needed)
 .venv/bin/python deletion_test.py
@@ -105,19 +105,21 @@ house's state. The route map:
 | `/gallery` | free | **Room 5** — the watchable world (all rooms, live) |
 | `/manifest` | free | machine-readable service descriptor |
 | `/intel/quote` | **paid** | **Room 1** — the counter (the money engine) |
-| `/intel/entity/:name` | **paid** | **Room 5** — the entity dossier (cross-room, timestamped) |
+| `/intel/entity/:name` | **paid** | **Room 5** — the entity dossier (cross-room, timestamped; live read, full engine) |
 | `POST /bond/quote` | **paid** | **Room 2** — price a guarantee on a provider |
 | `POST /watch/screen` | **paid** | **Room 4** — screen a counterparty |
 | `POST /scout/report` | **paid** | **Room 3** — the scout report |
-| `POST /scout/hire` | **paid** | **Room 3** — memory-driven hiring terms |
+| `POST /scout/hire` | **paid** | **Room 3** — memory-driven hiring terms (the ruling is journaled) |
+| `POST /prepay/topup` | **paid** | trust — fund the prepay credit a risky wallet needs (fee onchain, credit spendable) |
 | `/house/ledger` | free | the money shot — callers (last-6), dedup + scar + job state |
-| `/house/journal` | free | the season log — the cold settlement journal, newest first |
+| `/house/journal` | free | the season log — the cold settlement journal, newest first (addresses masked) |
 | `/house/jobs` | free | live job state machines (F4) |
 | `/house/bonds` | free | **Room 2** — the insurance register |
 | `/house/front` | free | **Room 3** — the front-office draft board |
-| `/house/watch` | free | **Room 4** — the verdict feed |
-| `/house/audit` | free | the self-auditor (failure rate, trust drift) |
-| `/house/calibrate` | free | the price calibrator |
+| `/house/watch` | free | **Room 4** — the verdict feed (addresses masked) |
+| `/house/audit` | free | the self-auditor (last stored report; `POST /house/audit/run` is token-gated) |
+| `/house/calibrate` | free | the price calibrator (last stored report; `POST /house/calibrate/run` is token-gated) |
+| `POST /house/bonds/claim` | gated | the claim auto-pay — money OUT, capability-token gated (never a public endpoint) |
 
 A paid route hit with no payment returns **402** + a `PAYMENT-REQUIRED`
 quote; a refusal (banned / risky prepay / watchtower ABORT) returns **≥400**,
@@ -195,23 +197,27 @@ and one env flag (`SIBYL_DISABLED`) collapses all of them at once. That is why
 `deletion_test.py` can prove the whole product in one command.
 
 The memory is **on the critical path, not a side log**, at exactly these call
-sites in the request flow (`core/house.py`, `serve_intel`):
+sites in the request flow (`core/house.py`, `_paid_serve` — the shared paid
+pipeline every paid intel route runs):
 
 | Step | Call | What it decides |
 |------|------|-----------------|
-| 1 | `JobStateMachine.start(...)` → `core/jobs.py` (WARM row) | the job is persisted *before* serving — kill-resume + idempotent settle |
-| 2 | `TrustLedger.recall(payer)` → `core/trust.py` → `memory.get_entity("caller", payer)` | the segment / price / refuse decision |
-| 3 | `dedup.fingerprint(route, params)` + `c.dedup_fp` → `core/dedup.py` | a repeat is served from memory at net $0 |
-| 4 | `ScarCompiler.apply_policy(route, fp)` → `core/scars.py` | a compiled scar hardens this serve |
-| 5 | **serve** (the route handler) | the work |
-| 6 | `TrustLedger.update(payer, "served")` + `dedup.record(fp)` | the relationship + cache update |
-| 7 | on failure: `ScarCompiler.record(scar)` | the scar is written to memory |
+| 1 | `TrustLedger.recall(payer)` → `core/trust.py` → `memory.get_entity("caller", payer)` | the segment / price / refuse decision (re-derived from live counters, never the stored label) |
+| 2 | watchtower `consult(payer)` → `core/watch.py` | ABORT → refused before the job exists (uncharged) |
+| 3 | `dedup.fingerprint(route, params)` + `is_repeat` → `core/dedup.py` | a repeat is served from memory at net $0 — BEFORE any work |
+| 4 | `scars.active_rules()` + `_apply_scar_action` → `core/scars.py` | a compiled scar hardens this serve (switch upstream / refuse / prepay) |
+| 5 | risky prepay check | surcharge unaffordable → 403 (uncharged); affordable → credit debited |
+| 6 | `JobStateMachine.start(...)` → `core/jobs.py` (WARM row) | the job is persisted *before* serving — kill-resume + idempotent settle |
+| 7 | **serve** on the active upstream (F3 failover) | the work |
+| 8 | `TrustLedger.update(payer, "served")` + `dedup.mark_served` | the relationship + cache update |
+| 9 | on failure: `ScarCompiler.record(scar)` + `note_failed_fp` | the scar is written to memory; retry_budget=0 spends the fingerprint |
 
-Open `core/memory.py` and search for `get_entity`, `update`, and `set_state` —
-every decision above is one of those three calls. **Delete that file's backend
-(`SIBYL_DISABLED=1`) and steps 2, 3, 4, 6, 7 all become no-ops**: everyone is
-`new` at list price, nothing is deduped, no scars survive, a mid-kill job
-double-serves. That is the DQI gate, and it is the product.
+Open `core/memory.py` and search for `get_entity`, `set_entity`, and
+`set_state` — every decision above is one of those three calls. **Delete that
+file's backend (`SIBYL_DISABLED=1`) and every read/write above becomes a
+no-op**: everyone is `new` at list price, nothing is deduped, no scars
+survive, a mid-kill job double-serves. That is the DQI gate, and it is the
+product.
 
 ---
 
@@ -286,18 +292,20 @@ facilitator or a network** (F4 — "not a god-object"):
 app/x402/seller.py     the thin FastAPI/x402 boundary + journaling middleware
 app/x402/landing.py    the landing page (its own brand, a live state mirror)
 app/x402/gallery.py    Room 5 — the watchable world (live, in the house's design)
-core/house.py          the money engine (House) — the real money flow
+core/house.py          the money engine (House) — the real money flow (shared paid pipeline)
 core/wallet.py         money-OUT (HouseWallet / safe DryRunWallet)
 core/settle_journal.py the server-side money ledger (decodes PAYMENT-RESPONSE)
 core/executor.py       F4 — re-drive jobs stuck mid-serve after a restart
-core/trust.py          the trust ledger (F1) — segments + deltas
+core/trust.py          the trust ledger (F1) — segments + deltas + prepay credit
 core/dedup.py          dedup-as-revenue (F2)
 core/scars.py          failure → scar → compiled policy (F3)
 core/jobs.py           the kill-resilient job store (F4)
-core/bonds.py          Room 2 — the underwriting desk (bonds, claims, cap)
+core/bonds.py          Room 2 — the underwriting desk (bonds, claim state machine, cap)
 core/watch.py          Room 4 — the watchtower (deterministic screens)
 core/scout.py          Room 3 — the front office (scouting / hiring terms)
 core/dossier.py        Room 5 — the entity dossier (the cross-room read)
+core/redact.py         public-surface address masking (free routes mask, cold journal keeps)
+core/identity.py       counterparty-id shape validation (0x + 40) at the boundary
 core/memory.py         THE MEMORY LAYER (Sibyl) — the load-bearing module
 core/acp.py            the ACP / Virtuals delegator
 core/audit.py          the self-auditor
@@ -330,24 +338,78 @@ removing it removes the product.
 ## Tests
 
 ```bash
-pytest tests/ -q        # 148 passing
+pytest tests/ -q        # 202 passing
 ```
 
 - `test_pricing_enforced.py` — the money engine driven directly (no network,
   no facilitator, no acp): segment pricing, VIP/regular/repeat rebates, risky
   prepay, banned refusal, scar citation, journal, dedup.
+- `test_audit_fixes_p0.py` — serve-path truth: repeats never re-run work,
+  refusals leave no job, no job-id reset, honest compute-avoided counter.
+- `test_audit_fixes_p1.py` — F3 for real: switch_upstream rotates (and
+  persists across sessions), retry_budget=0 refuses a remembered failure,
+  in-flight failover escapes a failing upstream.
+- `test_audit_fixes_p2.py` — no full address on the public surface (masked to
+  `0x…last4` on free routes; settlement tx hashes preserved for
+  Basescan reconciliation).
+- `test_audit_fixes_p3b.py` — the claim state machine (a payout the wallet
+  can't send is booked `failed`, never `paid` — never imaginary money), the
+  auto-trigger pays every open bond on a defaulting provider, the operator
+  claim route is token-gated, hire decisions are journaled.
+- `test_audit_fixes_p4b.py` / `test_audit_fixes_p4c.py` — read-only GET
+  audit/calibrate, bounded job state, unpolluted verdict feed, hermetic
+  dedup cache, counterparty-id shape validation at the boundary.
 - `test_jobs.py` — F4 kill-resume + **no double charge**.
-- `test_bonds.py` — Room 2: premium from provider record, claim auto-payout,
-  remembered-claim cap, deletion.
+- `test_bonds.py` — Room 2: premium from provider record, claim auto-payout
+  (incl. the finding-#21 "no phantom payout" state machine), remembered-claim
+  cap, deletion.
 - `test_watchtower.py` — Room 4: wash ring refused with the ring drawn,
   deletion re-admits, the side-effect-free `assess()`.
 - `test_front_office.py` — Room 3: memory-driven draft + scout terms.
 - `test_gallery.py` — Room 5: the dossier (cross-room, timestamped), the paid
-  `/intel/entity/:name` route, the real intel body, the gallery + journal.
+  `/intel/entity/:name` route (full engine, finding #9), the real intel body,
+  the gallery + journal.
 - `test_scars.py` / `test_dedup.py` / `test_trust.py` / `test_memory.py` —
   each memory feature.
 - `test_seller.py` — the routes, incl. the landing page reading the collapse
   under `SIBYL_DISABLED=1`.
+
+---
+
+## Audit remediation (Sep 9)
+
+An external full-codebase audit (`THE HOUSE — Full Codebase Audit Report`)
+found real integrity gaps. Every SEV-1/SEV-2 finding was remediated in code
+with a regression test per package (see the commit log):
+
+- **repeat short-circuits to cache BEFORE work** — a down upstream can no
+  longer 502 a cached answer; `compute_avoided` is only counted when compute
+  was actually avoided (`81a78ab`)
+- **refusals precede job creation** — a refusal is a pure read and never
+  leaves a job the executor could settle (`81a78ab`)
+- **segment re-derived at serve time** from live counters, one pure
+  function — the enforcement surface matches the docs (`81a78ab`)
+- **F3 actions act, not cosmetically**: `switch_upstream` rotates a persisted
+  upstream registry; `retry_budget=0` refuses a fingerprint the house
+  remembers as failed (`f48db2d`)
+- **`/intel/entity` runs the full engine** (trust pricing, refusals, scar
+  policy, job state, envelope) — the dossier is a live read, dedup OFF
+  (`93190c4`)
+- **prepay credits are fundable** (`POST /prepay/topup`) — the risky surcharge
+  is a path a buyer can walk, not a permanent refusal (`93190c4`)
+- **public surface masks addresses** (`0x…last4`) while the cold journal
+  keeps full addresses for Basescan reconciliation (`8cf15ba`)
+- **claims can be triggered from the product surface** (token-gated — money
+  out is never a public endpoint), and a claim the wallet can't send books
+  `failed`, never `paid` (`7e68016`)
+- **hire decisions are journaled** — a rendered ruling is hiring memory
+  (`7e68016`)
+
+Honest residual: live money-out (rebates, bond claim payouts) is
+**DryRun-safe-by-default** — designed and unit-verified, but on a live
+deployment it is real only when `HOUSE_LIVE_MONEY_OUT=1` + `HOUSE_WALLET`
+are set. The demo's money beats show the full decision + booking path with
+`dry:`-marked hashes.
 
 ---
 
