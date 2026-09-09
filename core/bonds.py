@@ -247,21 +247,34 @@ class UnderwritingDesk:
 
     def settle_failure(self, bond_id: str, failure_class: str,
                        root_cause: str) -> tuple[int, dict]:
-        """The guaranteed provider failed: auto-pay the claim from the house
+        """The guaranteed provider failed: pay the claim from the house
         wallet and journal the tx next to the bond + the triggering scar.
 
         The INSURED (the buyer who paid the premium) receives the face — the
         house pays real money out on the provider's default. It also
         REMEMBERS both sides: a scar against the provider (raises its future
         premiums) + a default event on the provider's WARM record (escalates
-        its segment), and the claim itself shrinks the book's exposure cap.
+        its segment), and a PAID claim shrinks the book's exposure cap.
+
+        Claim state machine (finding #21: a claim the wallet cannot send must
+        never be booked as ``paid`` — "never book imaginary money"):
+          open   + payout ok      → paid    (scar + default + cap decay)
+          open   + payout failed  → failed  (default remembered, NO payout
+                                             booked, NO cap decay)
+          failed + payout ok      → paid    (retry: no double memory writes)
+          paid   → 409 (settled claims cannot be paid again)
         """
         bond = self.m.get_entity("bond", bond_id)
         if bond is None:
             return 404, {"error": "unknown bond", "bond_id": bond_id}
-        if bond.get("status") != "open":
+        status = bond.get("status")
+        if status == "paid":
             return 409, {"error": "bond already closed", "bond_id": bond_id,
-                         "status": bond.get("status")}
+                         "status": status}
+        if status not in ("open", "failed"):
+            return 409, {"error": "bond not claimable", "bond_id": bond_id,
+                         "status": status}
+        retry = status == "failed"  # payout failed before: re-attempt only
 
         provider = bond.get("provider")
         if provider is None:
@@ -272,39 +285,68 @@ class UnderwritingDesk:
         buyer = bond.get("buyer") or provider
         face = float(bond.get("face_usdc") or self.face)
 
-        # Record the triggering scar (memory act — the provider's failure is
-        # remembered and will raise its future premiums).
-        scar_id = None
-        if not self.m.disabled():
-            try:
-                scar_id = self.scars.record(
-                    f"/bond/{provider}", failure_class, root_cause)
-            except Exception:  # noqa: BLE001
-                scar_id = None
-            # Remember the default on the provider's WARM record too — this
-            # is what escalates the segment (defaults >= 1 → risky) so the
-            # provider's NEXT bond is priced off its failure.
-            try:
-                row = self.m.get_entity("provider", provider) or {}
-                row["default_events"] = int(row.get("default_events", 0)) + 1
-                self.m.set_entity("provider", provider, row)
-            except Exception:  # noqa: BLE001
-                pass
+        scar_id = bond.get("scar_evidence")
+        if not retry:
+            # Record the triggering scar (memory act — the provider's failure
+            # is remembered and will raise its future premiums).
+            if not self.m.disabled():
+                try:
+                    scar_id = self.scars.record(
+                        f"/bond/{provider}", failure_class, root_cause)
+                except Exception:  # noqa: BLE001
+                    scar_id = None
+                # Remember the default on the provider's WARM record too —
+                # this is what escalates the segment (defaults >= 1 → risky)
+                # so the provider's NEXT bond is priced off its failure.
+                try:
+                    row = self.m.get_entity("provider", provider) or {}
+                    row["default_events"] = int(row.get("default_events", 0)) + 1
+                    self.m.set_entity("provider", provider, row)
+                except Exception:  # noqa: BLE001
+                    pass
 
-        # Auto-pay the face from the house wallet to the insured (real
-        # onchain money-out when live; a clearly-marked dry: hash otherwise).
+        # Pay the face from the house wallet to the insured (real onchain
+        # money-out when live; a clearly-marked dry: hash otherwise).
         claim_tx = None
         memo = f"underwriting claim {bond_id}: {provider} defaulted"
         try:
             claim_tx = self.wallet.send_usdc(buyer, face, memo)
-        except Exception:  # noqa: BLE001 - a claim you can't send is logged,
-            # not a phantom
+        except Exception:  # noqa: BLE001
             import logging
             logging.getLogger("the-house.bonds").exception(
                 "claim payout failed bond=%s amount=%s", bond_id, face)
             claim_tx = None
 
-        # Close the bond, journal the claim, and REMEMBER it (cap decays).
+        if claim_tx is None:
+            # The payout did NOT go out — the house owes the insured but must
+            # not book money it never sent. Close as "failed": the claim is
+            # retriable, the exposure cap does NOT decay (the house has not
+            # actually reduced its risk), and claims_paid is not incremented.
+            bond["status"] = "failed"
+            bond["closed_at"] = _now()
+            bond["claim_tx"] = None
+            bond["scar_evidence"] = scar_id
+            self.m.set_entity("bond", bond_id, bond)
+            self.m.write_event(
+                f"claim {bond_id} FAILED to pay ${face:.2f} to insured {buyer} "
+                f"(wallet unavailable; claim open for retry) scar={scar_id}",
+                kind="claim")
+            return 200, {
+                "bond_id": bond_id,
+                "provider": provider,
+                "insured": buyer,
+                "status": "failed",
+                "payout_usdc": face,      # the face OWED, not paid
+                "paid": False,
+                "claim_tx": None,
+                "scar_evidence": scar_id,
+                "claims_paid": self.claims_paid(),
+                "max_exposure_after": self._effective_max_exposure(),
+                "note": "payout not sent — the house does not book money it "
+                        "never sent; retry the claim once the wallet is live",
+            }
+
+        # Payout confirmed. Close the bond, journal the claim, REMEMBER it.
         bond["status"] = "paid"
         bond["closed_at"] = _now()
         bond["claim_tx"] = claim_tx
@@ -326,12 +368,46 @@ class UnderwritingDesk:
             "provider": provider,
             "insured": buyer,
             "status": "paid",
+            "paid": True,
             "payout_usdc": face,
             "claim_tx": claim_tx,
             "scar_evidence": scar_id,
             "claims_paid": self.claims_paid(),
             "max_exposure_after": self._effective_max_exposure(),
         }
+
+    # ------------------------------------------------------------------ #
+    # The auto-trigger (Room 2's money moment: the default pays the claim)
+    # ------------------------------------------------------------------ #
+    def claim_for_provider(self, provider: str, failure_class: str,
+                           root_cause: str) -> list[tuple[int, dict]]:
+        """Auto-pay every OPEN bond the house has on this provider.
+
+        This is the trigger Room 2's spec describes: "when the guaranteed
+        provider fails (scar recorded / job terminal-failed), the house
+        AUTO-PAYS the claim." The ACP job-completion hook (or the demo's
+        fault injector, or the operator claim route) calls this the moment a
+        default is known. Each claim is settled independently — one bad bond
+        does not sink the others.
+        """
+        provider = (provider or "").strip()
+        results: list[tuple[int, dict]] = []
+        if not provider or self.m.disabled():
+            return results
+        for bond in self.m.list_entities("bond", limit=500):
+            if str(bond.get("provider", "")).strip() != provider:
+                continue
+            if bond.get("status") != "open":
+                continue
+            try:
+                results.append(self.settle_failure(
+                    str(bond.get("id")), failure_class, root_cause))
+            except Exception:  # noqa: BLE001 - settle the rest regardless
+                import logging
+                logging.getLogger("the-house.bonds").exception(
+                    "claim_for_provider: failed to settle bond %s",
+                    bond.get("id"))
+        return results
 
     # ------------------------------------------------------------------ #
     # The public register (the money shot)

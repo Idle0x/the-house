@@ -693,6 +693,43 @@ def build_app() -> FastAPI:
                 # screens). Public view masks each to 0x<last4>.
                 "feed": redact_value(watch.feed())}
 
+    @app.post("/house/bonds/claim", include_in_schema=False)
+    async def route_bond_claim(request: Request):
+        """Room 2: the claim auto-pay. MONEY OUT — capability-gated when
+        HOUSE_COMPILE_TOKEN is set (FIX-4d; open only in tokenless local/test).
+
+        The trigger the spec describes: the guaranteed provider defaulted
+        (scar recorded / job terminal-failed), so the house pays every OPEN
+        bond on it from its own wallet. Body:
+            {"provider": "0x…", "failure_class": "timeout",
+             "root_cause": "…"}
+        The payout tx (real when live, dry: in DryRun) is journaled next to
+        each bond + the triggering scar; a payout the wallet can't send books
+        the claim "failed" (retriable), never "paid" (finding #21).
+        """
+        token = os.getenv("HOUSE_COMPILE_TOKEN", "").strip()
+        if token:
+            given = request.headers.get("x-house-capability", "")
+            if given != token:
+                return JSONResponse(status_code=403,
+                                    content={"error": "capability token required"})
+        body = await request.json()
+        provider = require_wallet(body.get("provider"), "provider")
+        if provider is None:
+            return JSONResponse(status_code=400,
+                                 content={"error": "provider must be a "
+                                                   "0x-prefixed 40-char "
+                                                   "address"})
+        failure_class = str(body.get("failure_class") or "timeout")
+        root_cause = str(body.get("root_cause") or "provider default")
+        desk = app.state.desk  # type: ignore[assignment]
+        results = desk.claim_for_provider(provider, failure_class, root_cause)
+        return {"house": SERVICE_NAME,
+                "provider_last6": provider[-6:],
+                "claims": [c for _st, c in results],
+                "settled": sum(1 for _st, c in results if c.get("paid")),
+                "book": desk.register()["book"]}
+
     @app.get("/house/front", include_in_schema=False)
     def route_front(request: Request):
         """Room 3's public ledger: the draft board — every provider the
@@ -850,6 +887,12 @@ def build_app() -> FastAPI:
                                  content={"error": "payer unknown after settlement"})
         front: FrontOffice = request.app.state.front  # type: ignore[assignment]
         decision = front.decision(provider)
+        # A rendered hire decision is HIRING MEMORY: the ruling (draft or
+        # refusal, and the record it drew from) is journaled on the COLD
+        # trail. (The audit found the route was a pure read — the house
+        # decided and remembered nothing.)
+        front.note_hire(provider, outcome="refused" if decision["refused"]
+                        else "draft")
         if decision["refused"]:
             # The house refuses to draft this provider — refuse BEFORE we
             # would have done work (403 cancels settlement: uncharged).

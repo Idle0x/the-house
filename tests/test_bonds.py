@@ -161,12 +161,16 @@ def test_claim_only_pays_once(tmp_path):
 
 
 def test_unknown_claim_tx_not_phantom_when_wallet_raises(tmp_path, monkeypatch):
-    """A claim the wallet can't send is logged, not a phantom: the bond closes
-    with a None tx rather than an invented hash."""
+    """Finding #21: a claim the wallet can't send is NOT booked as paid —
+    the bond closes as "failed" (retriable), the payout is not booked, the
+    exposure cap does NOT decay, and claims_paid is not incremented. The
+    house does not book imaginary money."""
     desk = _mk_desk(tmp_path)
     _seed_proven(desk.m)
     _, iss = desk.issue(PROVEN, BUYER)
     bid = iss["bond_id"]
+    cap_before = desk._effective_max_exposure()
+    orig_send = desk.wallet.send_usdc  # bound method, for the retry below
 
     def boom(to, amt, memo):
         raise RuntimeError("no wallet configured")
@@ -174,8 +178,28 @@ def test_unknown_claim_tx_not_phantom_when_wallet_raises(tmp_path, monkeypatch):
 
     st, claim = desk.settle_failure(bid, "timeout", "x")
     assert st == 200
+    assert claim["status"] == "failed"
+    assert claim["paid"] is False
     assert claim["claim_tx"] is None  # not a fabricated hash
-    assert claim["payout_usdc"] == pytest.approx(FACE)
+    assert claim["payout_usdc"] == pytest.approx(FACE)  # owed, not paid
+    # No payout was sent → the cap did NOT decay and nothing was "paid".
+    assert claim["claims_paid"] == 0
+    assert claim["max_exposure_after"] == pytest.approx(cap_before)
+    bond = desk.m.get_entity("bond", bid)
+    assert bond["status"] == "failed"
+    assert bond["claim_tx"] is None
+
+    # Retry with a working wallet: pays exactly once, decays the cap once.
+    desk.wallet.send_usdc = orig_send  # type: ignore[assignment]
+    st, claim2 = desk.settle_failure(bid, "timeout", "x")
+    assert st == 200
+    assert claim2["status"] == "paid"
+    assert claim2["paid"] is True
+    assert claim2["claim_tx"] is not None
+    assert claim2["claims_paid"] == 1
+    assert claim2["max_exposure_after"] == pytest.approx(cap_before - 1.0)
+    # Settled: a third attempt is refused (no double payout).
+    assert desk.settle_failure(bid, "timeout", "x")[0] == 409
 
 
 # --------------------------------------------------------------------------- #
