@@ -18,7 +18,9 @@ from typing import Any, Optional
 
 from core.memory import HouseMemory
 
-CACHE_DIR = Path(__file__).resolve().parents[1] / "cache"
+CACHE_DIR = Path(os.getenv(
+    "HOUSE_CACHE_DIR",
+    str(Path(__file__).resolve().parents[1] / "cache")))
 
 
 def canonical(params: dict[str, Any], volatile_keys: set[str] | None = None) -> dict[str, Any]:
@@ -36,9 +38,12 @@ def fingerprint(route: str, params: dict[str, Any]) -> str:
 class DedupEngine:
     """Server-side dedup store. Deletion harness: no cache reads/writes."""
 
-    def __init__(self, m: HouseMemory, cache_dir: Path = CACHE_DIR) -> None:
+    def __init__(self, m: HouseMemory, cache_dir: Optional[Path] = None) -> None:
         self.m = m
-        self.cache_dir = cache_dir
+        # Resolve lazily so a session fixture (tests) or operator env can
+        # point the cache elsewhere without import-order tricks.
+        self.cache_dir = cache_dir or Path(os.getenv(
+            "HOUSE_CACHE_DIR", str(CACHE_DIR)))
         self.cache_dir.mkdir(parents=True, exist_ok=True)
 
     # ------------------------------------------------------------------ #

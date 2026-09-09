@@ -39,6 +39,8 @@ from dotenv import load_dotenv
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse, Response
 
+from core.identity import require_wallet
+
 from app.x402.landing import render_landing
 from app.x402.gallery import render_gallery
 from core.bonds import UnderwritingDesk
@@ -673,10 +675,12 @@ def build_app() -> FastAPI:
           * over the remembered exposure cap → 403, uncharged
         """
         body = await request.json()
-        provider = str(body.get("provider", "")).strip()
-        if not provider:
+        provider = require_wallet(body.get("provider"), "provider")
+        if provider is None:
             return JSONResponse(status_code=400,
-                                 content={"error": "provider address required"})
+                                 content={"error": "provider must be a "
+                                                   "0x-prefixed 40-char "
+                                                   "address"})
         payer = extract_payer(getattr(request.state, "payment_payload", None))
         if payer is None:
             # A verified payment with no recoverable payer is a server
@@ -714,10 +718,12 @@ def build_app() -> FastAPI:
         HOLD / ABORT + the evidence (self-pay, funding-cluster sybil, factory
         fingerprint, cold-start volume, metronome timing)."""
         body = await request.json()
-        wallet = str(body.get("wallet", "")).strip()
-        if not wallet:
+        wallet = require_wallet(body.get("wallet"), "wallet")
+        if wallet is None:
             return JSONResponse(status_code=400,
-                                 content={"error": "wallet required"})
+                                 content={"error": "wallet must be a "
+                                                   "0x-prefixed 40-char "
+                                                   "address"})
         payer = extract_payer(getattr(request.state, "payment_payload", None))
         if payer is None:
             return JSONResponse(status_code=502,
@@ -733,10 +739,12 @@ def build_app() -> FastAPI:
         it would offer. The receipt carries the memory-priced quote (a costly
         memory quotes a premium); the wire settles the base."""
         body = await request.json()
-        provider = str(body.get("provider", "")).strip()
-        if not provider:
+        provider = require_wallet(body.get("provider"), "provider")
+        if provider is None:
             return JSONResponse(status_code=400,
-                                 content={"error": "provider address required"})
+                                 content={"error": "provider must be a "
+                                                   "0x-prefixed 40-char "
+                                                   "address"})
         payer = extract_payer(getattr(request.state, "payment_payload", None))
         if payer is None:
             return JSONResponse(status_code=502,
@@ -752,10 +760,12 @@ def build_app() -> FastAPI:
         The draft ruling from the house's hiring memory: proven → preferred
         terms; unknown → standard + stricter evaluator; risky → refused."""
         body = await request.json()
-        provider = str(body.get("provider", "")).strip()
-        if not provider:
+        provider = require_wallet(body.get("provider"), "provider")
+        if provider is None:
             return JSONResponse(status_code=400,
-                                 content={"error": "provider address required"})
+                                 content={"error": "provider must be a "
+                                                   "0x-prefixed 40-char "
+                                                   "address"})
         payer = extract_payer(getattr(request.state, "payment_payload", None))
         if payer is None:
             return JSONResponse(status_code=502,
@@ -802,24 +812,26 @@ def build_app() -> FastAPI:
         caller, provider, insured, or payer is a 404, uncharged (>=400 cancels
         the settlement). It never fabricates a profile it never remembered.
         """
-        name = (name or "").strip()
-        if not name:
+        entity = require_wallet(name, "entity")
+        if entity is None:
             return JSONResponse(status_code=400,
-                                 content={"error": "entity name required"})
+                                 content={"error": "entity must be a "
+                                                   "0x-prefixed 40-char "
+                                                   "address"})
         payer = extract_payer(getattr(request.state, "payment_payload", None))
         if payer is None:
-            # Verified payment, no recoverable payer: server failure (5xx
-            # cancels settlement — the buyer is not charged for a dossier it
-            # cannot attribute to a payer).
+            # Verified payment, no recoverable payer is a server
+            # failure (5xx cancels settlement — the buyer is not charged
+            # for a dossier it cannot attribute to a payer).
             return JSONResponse(
                 status_code=502, content={"error": "payer unknown after settlement"})
         dossier: Dossier = request.app.state.dossier  # type: ignore[attr-defined]
-        result = dossier.build(name)
+        result = dossier.build(entity)
         if not result["found"]:
             # The house has no record of this entity. 404 cancels settlement
             # (uncharged) — honesty: we sell the memory we have, nothing more.
             return JSONResponse(status_code=404, content={
-                "entity": name,
+                "entity": entity,
                 "found": False,
                 "note": result["note"],
                 "uncharged": True,
