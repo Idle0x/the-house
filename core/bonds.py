@@ -256,7 +256,7 @@ class UnderwritingDesk:
         premiums) + a default event on the provider's WARM record (escalates
         its segment), and a PAID claim shrinks the book's exposure cap.
 
-        Claim state machine (finding #21: a claim the wallet cannot send must
+        Claim state machine (a claim the wallet cannot send must
         never be booked as ``paid`` — "never book imaginary money"):
           open   + payout ok      → paid    (scar + default + cap decay)
           open   + payout failed  → failed  (default remembered, NO payout

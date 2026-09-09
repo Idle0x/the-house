@@ -10,7 +10,7 @@ the job always agree. Deletion → recall is None → every provider is "unknown
 
 Audit invariants under test:
   * P3b — a rendered hire ruling (draft OR refusal) is HIRING MEMORY (note_hire).
-  * SEV-2 — ``ACPDelegator.delegate`` is now reachable on a capability-gated
+  * ``ACPDelegator.delegate`` is now reachable on a capability-gated
     route (``POST /scout/delegate``); a risky provider is skipped BEFORE any
     onchain call, and the route is 403 without the capability token.
 """
@@ -192,7 +192,7 @@ def test_hire_report_registered_and_hire_journals_the_ruling(tmp_path, monkeypat
 
 
 def test_delegate_route_gated_skips_risky_before_onchain(tmp_path, monkeypatch):
-    """Audit SEV-2: ACPDelegator.delegate is reachable on the capability-gated
+    """ACPDelegator.delegate is reachable on the capability-gated
     POST /scout/delegate. With a token set it is 403 without the capability
     header. A RISKY provider is skipped BEFORE any onchain call (no delegate
     invoked, no job, no escrow) — the house does not hire it. A provable

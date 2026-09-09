@@ -29,7 +29,7 @@ def test_wrapper_read_write_contract_and_kind_guard(mem):
     None/empty (not an error), and an unknown event kind is rejected — no
     silent taxonomy drift. Entities (with upsert-merge), JSON reference values,
     dict state, list, and journaled events (kind: ``served`` AND the watchtower's
-    ``funding`` writer, audit SEV-2)."""
+    ``funding`` writer)."""
     mem.upsert_entity("caller", "0xabc", {"tx_count": 1})
     mem.upsert_entity("caller", "0xabc", {"tx_count": 2, "segment": "regular"})
     assert mem.get_entity("caller", "0xabc") == {"tx_count": 2, "segment": "regular"}

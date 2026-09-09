@@ -20,7 +20,7 @@ def _mem() -> HouseMemory:
 
 def test_segment_computation_transitions_and_deletion_gate():
     """One pure function (compute_segment) re-derives the segment from the live
-    counters — never the stored label (audit finding 5/6) — and the ledger
+    counters — never the stored label — and the ledger
     transitions drive it: new→regular (3 serves)→vip (10, trust≥80);
     3 caller_fault→risky (prepay), 3 refunds→banned. A first-time caller is
     allowed at list price. THE GATE: with memory disabled a real VIP and a

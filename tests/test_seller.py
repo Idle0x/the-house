@@ -2,7 +2,7 @@
 
 We test the memory act + the app wiring directly: the landing page, the
 manifest, the free money-shot routes, the capability gate, the boundary
-hardening (junk-id rejection + address masking), and the audited P4b
+hardening (junk-id rejection + address masking), and the P4b
 invariants that the self-auditor / calibrator GETs are READ-ONLY while the
 mutation lives on a token-gated POST /run, and that startup prunes job state.
 """
@@ -132,7 +132,7 @@ def test_free_routes_gated_and_startup_prunes(tmp_path, monkeypatch):
 
 # --------------------------------------------------------------------------- #
 # P4b — the self-auditor / calibrator GETs are READ-ONLY; the mutation lives
-# on a token-gated POST /run (finding #10).
+# on a token-gated POST /run.
 # --------------------------------------------------------------------------- #
 def test_audit_calibrate_gets_read_only_run_posts_gate(tmp_path, monkeypatch):
     """GET /house/audit + /house/calibrate must NOT mutate stored state (a
@@ -170,14 +170,14 @@ def test_audit_calibrate_gets_read_only_run_posts_gate(tmp_path, monkeypatch):
 
 
 # --------------------------------------------------------------------------- #
-# Boundary hardening (P4c + SEV-2): junk-id rejection + address masking
+# Boundary hardening: junk-id rejection + address masking
 # --------------------------------------------------------------------------- #
 def test_boundary_rejects_junk_and_masks_addresses(tmp_path, monkeypatch):
     """Every public route that takes a counterparty id rejects a non-0x-40 junk
-    string with 400 BEFORE any memory is written (finding #25). AND the free
+    string with 400 BEFORE any memory is written. AND the free
     public routes render full payer/wallet addresses masked to 0x…last4 while
     the COLD journal keeps them (Basescan reconciliation) and settlement tx
-    hashes survive verbatim (SEV-2 P2)."""
+    hashes survive verbatim."""
     import asyncio
     from app.x402.seller import build_app
     monkeypatch.setenv("HOUSE_MEMORY_DB", str(tmp_path / "memory.db"))

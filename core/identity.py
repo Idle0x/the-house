@@ -8,7 +8,7 @@ code actually honours is **shape**, not **hex**:
 
     ``0x`` + exactly 40 alphanumeric chars
 
-This module enforces that shape at the HTTP boundary (audit finding #25:
+This module enforces that shape at the HTTP boundary (
 ``front.decision`` / ``dossier._short`` / ``scout`` did ``[-6:]`` on
 arbitrary user strings, and ``POST /scout/hire {provider: "hello"}`` would
 write a junk provider row into memory). The fix is a single reusable check so

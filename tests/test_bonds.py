@@ -122,7 +122,7 @@ def test_claim_autopays_face_to_insured_and_remembers(tmp_path):
 
 
 def test_unknown_claim_tx_not_phantom_when_wallet_raises(tmp_path, monkeypatch):
-    """Finding #21: a claim the wallet can't send is NOT booked as paid — the
+    """A claim the wallet can't send is NOT booked as paid — the
     bond closes as "failed" (retriable), no payout is booked, the cap does NOT
     decay, and claims_paid is not incremented. The house never books imaginary
     money. A retry with a working wallet pays exactly once."""

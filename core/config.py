@@ -83,7 +83,7 @@ WATCH_FEED_MAX = 50              # verdict feed cap (state "watch_feed")
 INTEL_ENTITY_PRICE = 0.02        # USDC for an entity dossier (paid, x402)
 
 # --- prepay top-up (the funding half of the risky-surcharge path) ----------
-# A risky wallet carries the surcharge on a PREPAID credit. The audit found
+# A risky wallet carries the surcharge on a PREPAID credit. The credit
 # the credit was only ever debited, never funded — a permanent refusal. The
 # top-up charges the buyer (onchain) for the credit itself plus a small
 # handling fee; the credit lands on the caller row, spendable on the next

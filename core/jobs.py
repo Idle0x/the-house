@@ -163,7 +163,7 @@ class JobStateMachine:
         return resumed
 
     def prune(self, keep: int = 200) -> int:
-        """Bound the jobs state document (audit finding: settled jobs were
+        """Bound the jobs state document (settled jobs were
         never pruned — ``snapshot(50)`` truncated display only, so the HOT
         state grew forever against the 2MB cap).
 

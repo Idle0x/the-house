@@ -221,7 +221,7 @@ class Watchtower:
     def note_funding(self, addr: str, funded_by: str) -> dict:
         """Record who funds this caller — the funding-graph edge (Room 4).
 
-        The audit (SEV-2) found nothing in the product ever WROTE
+        Nothing in the product ever WROTE
         ``funded_by`` — only tests seeded it — so the watchtower's
         funding-cluster sybil rule (``_rule_sybil``) and the self-funding
         branch of ``self-pay`` could never fire on live traffic. This is the
@@ -259,7 +259,7 @@ class Watchtower:
         when the tower says ABORT. None → serve.
 
         Uses the pure ``assess()`` — it does NOT publish a CLEAR/HOLD verdict
-        for every ordinary serve (audit finding: ``screen()`` on every paid
+        for every ordinary serve (``screen()`` on every paid
         serve wrote a CLEAR feed entry + journal event; the feed should show
         verdicts that MEAN something). Only an ABORT is published (feed +
         kind=refuse), because the refusal is the news.

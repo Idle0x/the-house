@@ -13,7 +13,7 @@ scheme (NOT assumed):
   * the handler runs BEFORE settlement and a >=400 response CANCELS it, so a
     refusal (banned / risky prepay) is genuinely uncharged.
   * the settlement tx hash arrives in the PAYMENT-RESPONSE header AFTER the
-    handler — ``JournalingPaymentMiddleware`` records it (FIX-4).
+    handler — ``JournalingPaymentMiddleware`` records it.
 
 Loyalty pricing is settled base onchain + a real rebate tx back via the
 house's own ACP wallet (VIP ×0.80, regular ×0.95, repeat net-$0). See
@@ -76,7 +76,7 @@ HOUSE_WALLET_PLACEHOLDER = "0x" + "0" * 40
 
 
 def _acp_wallet_check() -> dict:
-    """FIX-4d startup self-check: the ACP wallet address MUST match the
+    """Startup self-check: the ACP wallet address MUST match the
     configured HOUSE_WALLET, else the house receives on the x402 pay_to but
     would send rebates from a different wallet (money split). Refuse boot.
 
@@ -158,7 +158,7 @@ def extract_payer(payment_payload: Any) -> Optional[str]:
 
 def make_journal_middleware(journal):  # type: ignore[no-untyped-def]
     """Return a ``PaymentMiddlewareASGI`` subclass that also journals every
-    settlement (FIX-4).
+    settlement.
 
     The x402 middleware settles AFTER the handler and returns the tx in the
     PAYMENT-RESPONSE header. The subclass wraps the normal payment flow, then
@@ -311,7 +311,7 @@ def build_app() -> FastAPI:
     front = FrontOffice(memory)
     # The ACP delegator is the ONCHAIN half of Room 3 — the Virtuals ×1.25
     # "exercised" claim. It was previously reachable only by direct code/tests
-    # (audit SEV-2: ACPDelegator.delegate called nowhere in the product). It
+    # (ACPDelegator.delegate called nowhere in the product). It
     # shells out to the `acp` CLI, so it is wired behind a capability token
     # (money/agent out is never a public, camera-free endpoint) and degrades
     # to a 503 when the CLI is absent.
@@ -337,7 +337,7 @@ def build_app() -> FastAPI:
     dossier = Dossier(memory, desk=desk, front=front, watch=watch,
                       journal=house.journal)
     # The engine needs the cross-room assembler for the paid /intel/entity
-    # live read (finding #9: the entity route now runs the FULL engine, not a
+    # live read (the entity route now runs the FULL engine, not a
     # dossier-only shortcut).
     house.dossier = dossier
 
@@ -556,7 +556,7 @@ def build_app() -> FastAPI:
         kind of every entry. The recall surface — the memory, readable by
         anyone. Deletion → empty (no events remembered)."""
         events = memory.read_events(limit=200)
-        # FIX-4c / SEV-2: the cold journal stores FULL payer addresses (for
+        # The cold journal stores FULL payer addresses (for
         # Basescan reconciliation). The PUBLIC view masks them — the operator
         # can still reconcile from the DB; anyone on the wire sees 0x<last4>.
         # Tx hashes are preserved verbatim (public onchain artifacts) so a
@@ -576,7 +576,7 @@ def build_app() -> FastAPI:
 
     @app.get("/house/ledger", include_in_schema=False)
     def route_ledger():
-        """Free public money shot. Addresses are anonymized to last-6 (FIX-4c)
+        """Free public money shot. Addresses are anonymized to last-6.
         — this endpoint is public; full addresses never leave the house."""
         callers = memory.list_entities("caller", limit=200)
         table = []
@@ -601,7 +601,7 @@ def build_app() -> FastAPI:
             "money": {
                 "settlements": house.journal.count(),
                 "settled_usdc": house.journal.total_usdc(),
-                # SEV-2: entries carry the full payer (kept for Basescan
+                # Entries carry the full payer (kept for Basescan
                 # reconciliation). Public view masks the payer to 0x<last4>;
                 # the onchain tx hash is left verbatim (it is public by design).
                 "recent": redact_value(house.journal.entries(limit=10)),
@@ -618,14 +618,14 @@ def build_app() -> FastAPI:
             "house": SERVICE_NAME,
             "memory": "disabled" if memory.disabled() else "live",
             "pending": house.jobs.pending_count(),
-            # SEV-2: job snapshots carry the full caller; public view masks it.
+            # Job snapshots carry the full caller; public view masks it.
             "jobs": redact_value(house.jobs.snapshot(limit=50)),
         }
 
     @app.post("/house/compile", include_in_schema=False)
     def route_compile(request: Request):
         """On-demand F3 scar compile. Gated by a capability token when one is
-        configured (FIX-4d — no unauthenticated mutation). Open only when no
+        configured (no unauthenticated mutation). Open only when no
         token is set (tests / local); production sets HOUSE_COMPILE_TOKEN."""
         token = os.getenv("HOUSE_COMPILE_TOKEN", "").strip()
         if token:
@@ -654,7 +654,7 @@ def build_app() -> FastAPI:
     @app.post("/house/audit/run", include_in_schema=False)
     def route_audit_run(request: Request):
         """E1 mutation: run the self-audit now (diff vs the stored baseline).
-        Capability-gated when HOUSE_COMPILE_TOKEN is set (FIX-4d)."""
+        Capability-gated when HOUSE_COMPILE_TOKEN is set."""
         token = os.getenv("HOUSE_COMPILE_TOKEN", "").strip()
         if token:
             given = request.headers.get("x-house-capability", "")
@@ -698,14 +698,14 @@ def build_app() -> FastAPI:
         house's own observed traffic."""
         return {"house": SERVICE_NAME,
                 "stats": watch.stats(),
-                # SEV-2: the feed stores full wallets (ABORT refusals + paid
+                # The feed stores full wallets (ABORT refusals + paid
                 # screens). Public view masks each to 0x<last4>.
                 "feed": redact_value(watch.feed())}
 
     @app.post("/house/bonds/claim", include_in_schema=False)
     async def route_bond_claim(request: Request):
         """Room 2: the claim auto-pay. MONEY OUT — capability-gated when
-        HOUSE_COMPILE_TOKEN is set (FIX-4d; open only in tokenless local/test).
+        HOUSE_COMPILE_TOKEN is set (open only in tokenless local/test).
 
         The trigger the spec describes: the guaranteed provider defaulted
         (scar recorded / job terminal-failed), so the house pays every OPEN
@@ -714,7 +714,7 @@ def build_app() -> FastAPI:
              "root_cause": "…"}
         The payout tx (real when live, dry: in DryRun) is journaled next to
         each bond + the triggering scar; a payout the wallet can't send books
-        the claim "failed" (retriable), never "paid" (finding #21).
+        the claim "failed" (retriable), never "paid".
         """
         token = os.getenv("HOUSE_COMPILE_TOKEN", "").strip()
         if token:
@@ -813,7 +813,7 @@ def build_app() -> FastAPI:
         if payer is None:
             return JSONResponse(status_code=502,
                                  content={"error": "payer unknown after settlement"})
-        # The funding-graph writer (audit SEV-2: nothing ever wrote funded_by).
+        # The funding-graph writer (nothing ever wrote funded_by).
         # A screen may declare the root that funds the wallet; the house
         # remembers it, so the sybil/self-funding rules fire across sessions.
         raw_funded = body.get("funded_by")
@@ -912,7 +912,7 @@ def build_app() -> FastAPI:
         decision = front.decision(provider)
         # A rendered hire decision is HIRING MEMORY: the ruling (draft or
         # refusal, and the record it drew from) is journaled on the COLD
-        # trail. (The audit found the route was a pure read — the house
+        # trail. (The route was a pure read — the house
         # decided and remembered nothing.)
         front.note_hire(provider, outcome="refused" if decision["refused"]
                         else "draft")
@@ -931,7 +931,7 @@ def build_app() -> FastAPI:
     async def route_scout_delegate(request: Request):
         """Room 3's onchain half: actually HIRE the provider via ACP.
 
-        The audit (SEV-2) found ``ACPDelegator.delegate`` — the Virtuals ×1.25
+        ``ACPDelegator.delegate`` — the Virtuals ×1.25
         "exercised" claim — was called NOWHERE in the product; live ACP jobs
         existed only as manual Gate-4 runs. This route is the wiring. It is
         capability-gated (``HOUSE_COMPILE_TOKEN``; open only in tokenless
@@ -1010,7 +1010,7 @@ def build_app() -> FastAPI:
     def route_intel_quote(request: Request):
         house_: House = request.app.state.house  # type: ignore[attr-defined]
         payer = extract_payer(getattr(request.state, "payment_payload", None))
-        # FIX-4b: a verified payment with no recoverable payer is a server
+        # A verified payment with no recoverable payer is a server
         # failure, not a 200. (The x402 middleware settles base only after we
         # return <400, so 5xx cancels the settlement — the buyer is not
         # charged for an undeliverable answer.)
@@ -1048,7 +1048,7 @@ def build_app() -> FastAPI:
             # for a dossier it cannot attribute to a payer).
             return JSONResponse(
                 status_code=502, content={"error": "payer unknown after settlement"})
-        # Finding #9 parity: the entity dossier runs the FULL engine (trust
+        # The entity dossier runs the FULL engine (trust
         # pricing, refusals, watchtower, scar policy, job state, envelope) —
         # not a dossier-only shortcut. A 404 / refusal comes back uncharged.
         house_: House = request.app.state.house  # type: ignore[attr-defined]

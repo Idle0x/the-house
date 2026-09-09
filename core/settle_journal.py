@@ -1,4 +1,4 @@
-"""Settlement journal — the house's server-side money ledger (FIX-4).
+"""Settlement journal — the house's server-side money ledger.
 
 The x402 settlement tx hash is NOT available to the route handler: the
 middleware runs the handler FIRST, then settles, and the hash is returned in

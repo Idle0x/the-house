@@ -254,7 +254,7 @@ def main() -> int:
     results = []
     # Hermetic cache: point the dedup cache at a temp dir for the whole run so
     # the demo beats never write real cache files into the repo ``cache/`` tree
-    # (audit finding #14). DedupEngine resolves HOUSE_CACHE_DIR lazily, so this
+    # DedupEngine resolves HOUSE_CACHE_DIR lazily, so this
     # must be set before any House() is built.
     cache_root = tempfile.mkdtemp(prefix="house_demo_cache_")
     os.environ["HOUSE_CACHE_DIR"] = cache_root

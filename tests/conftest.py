@@ -1,4 +1,4 @@
-"""Session-wide hermeticity (audit finding 14).
+"""Session-wide hermeticity.
 
 The dedup cache dir and the memory DB used to default into the repo tree /
 live data. Every test in this suite must be disk-hermetic:

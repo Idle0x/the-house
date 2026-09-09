@@ -34,11 +34,11 @@ from sibyl_memory_client.exceptions import NotFoundError
 
 # Journal kinds — KEEP STABLE. E2 (calibrate) scores decisions off
 # extra.kind, and the COLD journal is the audit trail.
-# Taxonomy (audit finding 16): `refund` (trust outcome) and `refunded`
+# Taxonomy: `refund` (trust outcome) and `refunded`
 # (job phase) are both kept for backward compat with written events;
 # `repeat`, `prepay` and `refuse` cover events that previously fell through
 # as `paid`/untyped or never existed. `funding` is the funding-graph edge
-# written by the watchtower (the `funded_by` writer, audit SEV-2).
+# written by the watchtower (the `funded_by` writer).
 KINDS = ("served", "caller_fault", "refund", "paid", "failure", "job",
          "audit", "refunded", "bond", "claim", "screen", "refuse",
          "repeat", "prepay", "funding")

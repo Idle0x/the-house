@@ -75,7 +75,7 @@ def test_loyalty_rebates_net_the_segment_price(monkeypatch, tmp_path):
 # F2 repeat: net $0, served from cache, no re-run, no dilution, no job reset   #
 # --------------------------------------------------------------------------- #
 def test_repeat_served_from_cache_no_rerun_honest_counter_no_job_reset(monkeypatch, tmp_path):
-    """The repeat path, end to end (the audited SEV-1 #1): the 2nd identical
+    """The repeat path, end to end: the 2nd identical
     request is (a) served from the ORIGINAL answer, (b) net $0, (c) does NOT
     re-run the expensive work — even with the upstream down — and (d) does NOT
     bump tx_count/trust. The compute-avoided counter credits only the true
@@ -144,7 +144,7 @@ def test_repeat_served_from_cache_no_rerun_honest_counter_no_job_reset(monkeypat
 # --------------------------------------------------------------------------- #
 def test_banned_refused_uncharged_no_fake_refund_no_job(monkeypatch, tmp_path):
     """C2: a banned wallet is refused 403 (settlement cancelled → uncharged),
-    journaled as kind=refuse, and — the audited SEV — leaves NO job the
+    journaled as kind=refuse, and leaves NO job the
     executor could later 'settle' as paid. No fake refund event either."""
     h = _mk(monkeypatch, tmp_path)
     bad = "0x" + "C" * 40
@@ -191,7 +191,7 @@ def test_risky_prepay_refused_then_served_with_credit(monkeypatch, tmp_path):
 
 
 def test_restart_after_refusal_settles_nothing(monkeypatch, tmp_path):
-    """End-to-end (the audited SEV-1 #2): a refusal → process restart →
+    """End-to-end: a refusal → process restart →
     startup() drives nothing and fabricates no 'settled by' event for the
     uncharged refusal. A refusal is a pure read, so there is nothing to settle."""
     db = str(tmp_path / "memory.db")
@@ -237,7 +237,7 @@ def test_executor_redrives_killed_serving_job_idempotently(monkeypatch, tmp_path
 
 
 # --------------------------------------------------------------------------- #
-# FIX-4 — settlement journal is idempotent by tx (reconcile to Basescan)        #
+# Settlement journal is idempotent by tx (reconcile to Basescan)    #
 # --------------------------------------------------------------------------- #
 def test_settlement_journal_idempotent_by_tx_and_header_decode(monkeypatch, tmp_path):
     """The journal records each settlement tx once; a re-delivered header (same

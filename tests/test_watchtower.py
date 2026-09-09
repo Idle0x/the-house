@@ -5,13 +5,13 @@ FastAPI boundary for the paid screen and the free verdict feed. Every rule is
 a pure function of per-caller memory: a wash ring is refused WITH the ring
 drawn, and deletion re-admits it — the before/after IS the gate.
 
-Audit invariants under test:
+Invariants under test:
   * P4b — the serve-path ``consult()`` publishes ONLY ABORT refusals (an
     ordinary CLEAR/HOLD serve must not pollute the public verdict feed).
-  * SEV-2 — ``funded_by`` now has a WRITER (``note_funding``), so the
+  * ``funded_by`` now has a WRITER (``note_funding``), so the
     funding-cluster sybil + self-funding rules fire on real declared data,
     not only hand-seeded tests.
-  * SEV-2 — a watchtower ABORT refusal is a caller-attributable failure and
+  * A watchtower ABORT refusal is a caller-attributable failure and
     books ``caller_fault`` in the trust ledger (a bad actor burns trust with
     every refused attempt).
 """
@@ -134,10 +134,10 @@ def test_hold_rules_flag_without_refusing(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# SEV-2 — the funded_by writer: the sybil rule fires on declared data
+# The funded_by writer: the sybil rule fires on declared data
 # ---------------------------------------------------------------------------
 def test_note_funding_writer_makes_sybil_fire_on_declared_data(tmp_path):
-    """The audit found nothing ever WROTE ``funded_by`` (only tests seeded
+    """Nothing ever WROTE ``funded_by`` (only tests seeded
     it), so the funding-cluster sybil rule could never fire live. The writer
     (a paid /watch/screen may declare the funding root) now makes it fire:
     declare three callers funded by one root → the sybil ring is drawn."""
@@ -175,7 +175,7 @@ def test_serve_path_refuses_ring_member_uncharged_books_fault_and_serves_clean(t
     assert "watchtower" in body["house_refused"]
     assert set(body["watch"]["ring"]) == set(ring)
     assert any(e["verdict"] == VERDICT_ABORT for e in t.feed())  # on screen
-    # SEV-2: the refusal is a caller-attributable failure — the ledger books
+    # The refusal is a caller-attributable failure — the ledger books
     # caller_fault, so a bad actor burns trust with every refused attempt.
     row = m.get_entity("caller", ring[0])
     assert row["failure_events"] == 1 and row["warning_events"] == 1
@@ -187,7 +187,7 @@ def test_serve_path_refuses_ring_member_uncharged_books_fault_and_serves_clean(t
 
 
 # ---------------------------------------------------------------------------
-# Audit P4b — the serve-path consult must NOT publish ordinary serves
+# The serve-path consult must NOT publish ordinary serves
 # ---------------------------------------------------------------------------
 def test_consult_publishes_only_abort_refusals(tmp_path):
     """A CLEAR and a HOLD consult leave NO feed entry and NO journal screen

@@ -196,7 +196,7 @@ class House:
     def startup(self) -> dict[str, Any]:
         """F4 boot: verify the money-out wallet, resume stalled jobs, re-drive.
 
-        FIX-4d: when live money-out is enabled, the ACP wallet address MUST
+        When live money-out is enabled, the ACP wallet address MUST
         match the configured HOUSE_WALLET (the x402 pay_to) — otherwise the
         house would receive on one wallet and send rebates from another.
         Fail-closed: on mismatch/error we mark wallet_ok=False (the engine
@@ -393,7 +393,7 @@ class House:
         return "serve"
 
     # ================================================================== #
-    # The shared paid-serve pipeline (finding #9: both paid intel routes must
+    # The shared paid-serve pipeline (both paid intel routes must
     # run the SAME engine — trust pricing, refusals, watchtower, scar policy,
     # job state, upstream/failover, money, envelope — not one thin wrapper
     # and one dossier-only shortcut).
@@ -420,7 +420,7 @@ class House:
                                 dedup=True, work=self._do_work)
 
     def serve_entity(self, payer: str, entity: str) -> tuple[int, dict]:
-        """The paid ``/intel/entity/{name}`` serve (finding #9 parity).
+        """The paid ``/intel/entity/{name}`` serve.
 
         The dossier is a LIVE cross-room read: it runs the FULL engine (trust
         pricing by the payer's segment, banned/watchtower/scar-policy refusals,
@@ -477,7 +477,7 @@ class House:
         if row is None:
             row = self.ledger.on_first(payer)
         # Segment RE-DERIVED from the live counters — never the stored label,
-        # which can be stale (audit finding 5/6). decision()/update()/serve
+        # which can be stale. decision()/update()/serve
         # now all read the same pure function.
         segment, mult = self.ledger.segment(row)
 
@@ -499,7 +499,7 @@ class House:
         # trust-model.md: D_CALLER_FAULT = "failure attributable to caller"):
         # the caller's own behavior is why the house declined them. Booking
         # it in the trust ledger is what lets a bad actor become risky/banned
-        # through REAL request behavior — the audit found trust could only
+        # through REAL request behavior — trust could only
         # ever move UP (+3/serve) from the product surface; a burner that
         # tries to launder now burns trust with every refused attempt.
         if self.watch is not None:
@@ -550,7 +550,7 @@ class House:
         # ---- risky ×1.30: enforce as Decision.prepay ----------------------
         # BEFORE any job is started — a prepay refusal is a pure read and must
         # not leave an accepted job the executor later settles as "paid" for
-        # an uncharged request (audit SEV-1). The onchain settlement is fixed
+        # an uncharged request. The onchain settlement is fixed
         # at base; the +30% cannot be extracted from the buyer's signature, so
         # a risky wallet must carry a prepay credit covering the surcharge, or
         # the house refuses (settlement cancelled → uncharged).
@@ -753,7 +753,7 @@ class House:
             rebate_tx = None
 
         # compute_avoided is TRUE only when no work ran — the counter is not
-        # a lie (audit SEV-1).
+        # a lie.
         self.dedup.note_repeat(price_usdc=self.base_price,
                                compute_avoided=served_from_cache)
 
@@ -791,7 +791,7 @@ class House:
         return 200, body
 
     def _journal_refusal(self, payer: str, why: str) -> None:
-        """COLD-journal every refusal (kind=refuse). Audit finding: banned /
+        """COLD-journal every refusal (kind=refuse). Banned /
         risky / policy refusals returned 403 but never wrote the event the
         spec requires ("Journal it") — only the watchtower did."""
         if self.m.disabled():

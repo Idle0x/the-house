@@ -93,7 +93,7 @@ class DedupEngine:
         """Increment the money counter: hits, usdc_saved, compute_avoided_usd.
 
         ``compute_avoided`` is TRUE only when the repeat was served from the
-        cache WITHOUT re-running the work (audit SEV-1: the counter used to
+        cache WITHOUT re-running the work (the counter used to
         claim +$0.001 even when `_do_work` had run on every repeat). The
         ~$0.001 estimate is added only when compute was genuinely avoided.
         """

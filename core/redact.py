@@ -1,7 +1,7 @@
-"""Public-surface address redaction (audit SEV-2 / FIX-4c).
+"""Public-surface address redaction.
 
 The house stores FULL addresses in the COLD journal + watch feed on purpose
-(FIX-4: the ledger must reconcile against Basescan, so the tx + payer are kept
+(the ledger must reconcile against Basescan, so the tx + payer are kept
 for the operator). The VIOLATION is that the FREE public routes
 (``/house/journal``, ``/house/ledger`` recent, ``/house/watch`` feed,
 ``/house/jobs``) rendered those full addresses verbatim to anyone.

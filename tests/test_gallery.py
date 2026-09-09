@@ -11,7 +11,7 @@ Two things are tested:
    it.
 
 2. The thin HTTP BOUNDARY — the paid ``GET /intel/entity/{name}`` route runs
-   the FULL engine (audit finding #9 parity): trust pricing, refusals, job
+   the FULL engine: trust pricing, refusals, job
    state, and the money envelope — not a dossier-only shortcut. A 402 gate,
    a 404 for an unknown entity (uncharged), a 502 for an unresolvable payer,
    and the free /gallery + /house/journal endpoints.
@@ -187,7 +187,7 @@ def _entity_handler(app):
 def test_entity_route_registered_gated_and_full_engine(tmp_path, monkeypatch):
     """GET /intel/entity/:name is behind the x402 gate (402 without payment —
     the proof the :param pattern is resolved by the middleware) and is priced
-    on the paid RouteConfig map. A paid read runs the FULL engine (finding #9):
+    on the paid RouteConfig map. A paid read runs the FULL engine:
     the cross-room dossier picture AND the money envelope (the VIP payer pays
     base onchain, net = 0.80×price, rebates 0.20)."""
     from fastapi.testclient import TestClient

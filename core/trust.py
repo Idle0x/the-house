@@ -120,7 +120,7 @@ class TrustLedger:
         a row that was seeded or written before a threshold change can carry
         an outdated projection. Every pricing/refusal decision reads what the
         counters ACTUALLY imply right now, so the enforcement surface is
-        consistent with ``decision()``/``update()`` (audit finding: the serve
+        consistent with ``decision()``/``update()`` (the serve
         path priced off the stored label while docs claimed re-derivation).
         """
         if not row:
@@ -132,7 +132,7 @@ class TrustLedger:
     def credit_prepay(self, addr: str, usdc: float) -> dict:
         """Add to the caller's prepay credit balance.
 
-        The audit found ``prepay_usdc`` was only ever DEBITED (the risky
+        ``prepay_usdc`` was only ever DEBITED (the risky
         surcharge + the ``prepay_required`` scar policy), never credited — so
         a risky wallet could never actually satisfy the surcharge and the
         ``Decision.prepay`` enforcement was a permanent refusal, not a path
