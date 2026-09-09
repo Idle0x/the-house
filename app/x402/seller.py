@@ -40,6 +40,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse, Response
 
 from core.identity import require_wallet
+from core.redact import redact_text, redact_value
 
 from app.x402.landing import render_landing
 from app.x402.gallery import render_gallery
@@ -521,6 +522,13 @@ def build_app() -> FastAPI:
         kind of every entry. The recall surface — the memory, readable by
         anyone. Deletion → empty (no events remembered)."""
         events = memory.read_events(limit=200)
+        # FIX-4c / SEV-2: the cold journal stores FULL payer addresses (for
+        # Basescan reconciliation). The PUBLIC view masks them — the operator
+        # can still reconcile from the DB; anyone on the wire sees 0x<last4>.
+        # Tx hashes are preserved verbatim (public onchain artifacts) so a
+        # settlement line keeps its hash while the payer is masked.
+        txs = frozenset(e.get("tx") for e in house.journal.entries(limit=200)
+                        if e.get("tx"))
         return {
             "house": SERVICE_NAME,
             "memory": "disabled" if memory.disabled() else "live",
@@ -528,7 +536,7 @@ def build_app() -> FastAPI:
                 "id": e.get("id"),
                 "ts": e.get("ts"),
                 "kind": (e.get("extra") or {}).get("kind"),
-                "text": " ".join(e.get("acted") or []),
+                "text": redact_text(" ".join(e.get("acted") or []), preserve=txs),
             } for e in events],
         }
 
@@ -559,7 +567,10 @@ def build_app() -> FastAPI:
             "money": {
                 "settlements": house.journal.count(),
                 "settled_usdc": house.journal.total_usdc(),
-                "recent": house.journal.entries(limit=10),
+                # SEV-2: entries carry the full payer (kept for Basescan
+                # reconciliation). Public view masks the payer to 0x<last4>;
+                # the onchain tx hash is left verbatim (it is public by design).
+                "recent": redact_value(house.journal.entries(limit=10)),
             },
             "callers": table,
             "scars": {"total": len(memory.list_entities("scar", limit=500)),
@@ -573,7 +584,8 @@ def build_app() -> FastAPI:
             "house": SERVICE_NAME,
             "memory": "disabled" if memory.disabled() else "live",
             "pending": house.jobs.pending_count(),
-            "jobs": house.jobs.snapshot(limit=50),
+            # SEV-2: job snapshots carry the full caller; public view masks it.
+            "jobs": redact_value(house.jobs.snapshot(limit=50)),
         }
 
     @app.post("/house/compile", include_in_schema=False)
@@ -652,7 +664,9 @@ def build_app() -> FastAPI:
         house's own observed traffic."""
         return {"house": SERVICE_NAME,
                 "stats": watch.stats(),
-                "feed": watch.feed()}
+                # SEV-2: the feed stores full wallets (ABORT refusals + paid
+                # screens). Public view masks each to 0x<last4>.
+                "feed": redact_value(watch.feed())}
 
     @app.get("/house/front", include_in_schema=False)
     def route_front(request: Request):
