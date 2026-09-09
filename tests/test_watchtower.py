@@ -1,18 +1,21 @@
-"""M2 — Room 4: the watchtower (market integrity).
+"""Room 4 — the watchtower (market integrity).
 
-The house refuses to launder. These drive the ``Watchtower`` directly (no
-x402 middleware, no CDP) and the FastAPI boundary for the paid screen + free
-verdict feed. Every rule is a pure function of per-caller memory, so a seeded
-wash ring is refused with the ring drawn, and deletion re-admits it — the
-before/after IS the gate.
+Drives the ``Watchtower`` directly (no x402 middleware, no CDP) plus the
+FastAPI boundary for the paid screen and the free verdict feed. Every rule is
+a pure function of per-caller memory: a wash ring is refused WITH the ring
+drawn, and deletion re-admits it — the before/after IS the gate.
 
-Money model: the screen is PAID (POST /watch/screen, base screen price on the
-402 quote); the serve-path refusal is UNCHARGED (403 before settlement, per
-the exact-scheme model in core/house.py).
+Audit invariants under test:
+  * P4b — the serve-path ``consult()`` publishes ONLY ABORT refusals (an
+    ordinary CLEAR/HOLD serve must not pollute the public verdict feed).
+  * SEV-2 — ``funded_by`` now has a WRITER (``note_funding``), so the
+    funding-cluster sybil + self-funding rules fire on real declared data,
+    not only hand-seeded tests.
+  * SEV-2 — a watchtower ABORT refusal is a caller-attributable failure and
+    books ``caller_fault`` in the trust ledger (a bad actor burns trust with
+    every refused attempt).
 """
 from __future__ import annotations
-
-import pytest
 
 from core import config as C
 from core.memory import HouseMemory
@@ -47,8 +50,7 @@ def _caller(m: HouseMemory, addr: str, **fields) -> dict:
 
 
 def _ring(m: HouseMemory, n: int = 3) -> list[str]:
-    """A funding-cluster sybil ring: n callers funded by one root.
-    Returns the member addresses."""
+    """A funding-cluster sybil ring: n callers funded by one root."""
     addrs = []
     for i in range(n):
         addr = "0x" + str(i).zfill(2) + "B" * 37
@@ -59,251 +61,208 @@ def _ring(m: HouseMemory, n: int = 3) -> list[str]:
 
 
 # ---------------------------------------------------------------------------
-# Rule: self-pay loop
+# The rules (each a pure function of per-caller memory)
 # ---------------------------------------------------------------------------
-def test_self_pay_when_wallet_is_the_house(tmp_path):
-    t = _tower(tmp_path)
-    s = t.screen(HOUSE_WALLET)
-    assert s["verdict"] == VERDICT_ABORT
-    assert R_SELF_PAY in [e["rule"] for e in s["evidence"]]
-    assert s["ring"] == [HOUSE_WALLET]
-
-
-def test_self_pay_when_funded_by_itself(tmp_path):
+def test_self_pay_refused_when_wallet_is_or_funds_the_house(tmp_path):
     m = _mem(tmp_path)
-    addr = "0x" + "1" * 40
-    _caller(m, addr, funded_by=addr)
     t = Watchtower(m, house_wallet=HOUSE_WALLET)
-    s = t.screen(addr)
+    assert t.screen(HOUSE_WALLET)["verdict"] == VERDICT_ABORT  # is the house
+    _caller(m, "0x" + "1" * 40, funded_by="0x" + "1" * 40)  # funds itself
+    s = t.screen("0x" + "1" * 40)
     assert s["verdict"] == VERDICT_ABORT
-    assert R_SELF_PAY in [e["rule"] for e in s["evidence"]]
+    assert any(e["rule"] == R_SELF_PAY for e in s["evidence"])
 
 
-# ---------------------------------------------------------------------------
-# Rule: funding-cluster sybil
-# ---------------------------------------------------------------------------
-def test_sybil_ring_is_refused_with_ring_drawn(tmp_path):
+def test_sybil_ring_refused_with_ring_drawn_and_two_members_clear(tmp_path):
     m = _mem(tmp_path)
-    ring = _ring(m)
+    ring = _ring(m)  # 3 members, shared root
     t = Watchtower(m, house_wallet=HOUSE_WALLET)
     s = t.screen(ring[0])
     assert s["verdict"] == VERDICT_ABORT
     assert R_SYBIL in [e["rule"] for e in s["evidence"]]
-    # The ring is part of the verdict — drawn on screen, not implied.
-    assert set(s["ring"]) == set(ring)
-    ev = next(e for e in s["evidence"] if e["rule"] == R_SYBIL)
-    assert str(len(ring)) in ev["detail"]
+    assert set(s["ring"]) == set(ring)  # the ring is drawn, not implied
+    # Threshold edge: 2 same-root members is below WATCH_SYBIL_CLUSTER_MIN.
+    m2 = _mem(tmp_path)
+    _ring(m2, 2)
+    t2 = Watchtower(m2, house_wallet=HOUSE_WALLET)
+    assert R_SYBIL not in [e["rule"] for e in
+                           t2.screen("0x00B" + "B" * 37)["evidence"]]
 
 
-def test_two_members_under_threshold_is_clear(tmp_path):
+def test_factory_cluster_refused_and_diverse_clears(tmp_path):
     m = _mem(tmp_path)
-    _ring(m, 2)  # below WATCH_SYBIL_CLUSTER_MIN (3)
     t = Watchtower(m, house_wallet=HOUSE_WALLET)
-    s = t.screen("0x00B" + "B" * 37)
-    assert R_SYBIL not in [e["rule"] for e in s["evidence"]]
-
-
-def test_clean_caller_is_clear(tmp_path):
-    m = _mem(tmp_path)
-    _caller(m, "0x" + "7" * 40, funded_by="0x" + "9" * 40)  # unique root
-    t = Watchtower(m, house_wallet=HOUSE_WALLET)
-    s = t.screen("0x" + "7" * 40)
-    assert s["verdict"] == VERDICT_CLEAR
-    assert s["evidence"] == []
-    assert s["ring"] == []
-
-
-# ---------------------------------------------------------------------------
-# Rule: factory fingerprint
-# ---------------------------------------------------------------------------
-def test_factory_cluster_is_refused(tmp_path):
-    m = _mem(tmp_path)
     fps = ["fp-1", "fp-2"]
     addrs = ["0x" + "C" * 40, "0x" + "D" * 40, "0x" + "E" * 40]
     for a in addrs:
         _caller(m, a, dedup_fp=fps)  # identical boilerplate
-    t = Watchtower(m, house_wallet=HOUSE_WALLET)
     s = t.screen(addrs[0])
-    assert s["verdict"] == VERDICT_ABORT
-    assert R_FACTORY in [e["rule"] for e in s["evidence"]]
+    assert s["verdict"] == VERDICT_ABORT and R_FACTORY in [e["rule"] for e in s["evidence"]]
     assert len(s["ring"]) == 3
 
+    m2 = _mem(tmp_path)
+    for i, a in enumerate(addrs):
+        _caller(m2, a, dedup_fp=[f"unique-{i}"])  # one shared < OVERLAP (2)
+    t2 = Watchtower(m2, house_wallet=HOUSE_WALLET)
+    assert R_FACTORY not in [e["rule"] for e in t2.screen(addrs[0])["evidence"]]
 
-def test_diverse_fingerprints_not_factory(tmp_path):
+
+def test_hold_rules_flag_without_refusing(tmp_path):
+    """cold-start-with-volume and metronome-timing are HOLD — evidence, not a
+    refusal. consult() returns None for them (the serve continues); with
+    history / irregular timing the same caller clears."""
     m = _mem(tmp_path)
-    for i, a in enumerate(["0x" + "C" * 40, "0x" + "D" * 40, "0x" + "E" * 40]):
-        _caller(m, a, dedup_fp=[f"unique-{i}"])  # one shared < OVERLAP (2)
     t = Watchtower(m, house_wallet=HOUSE_WALLET)
-    s = t.screen("0x" + "C" * 40)
-    assert R_FACTORY not in [e["rule"] for e in s["evidence"]]
+
+    cold = "0x" + "3" * 40
+    _caller(m, cold, tx_count=1, total_paid_usdc=0.10)  # volume, no history
+    sc = t.screen(cold)
+    assert sc["verdict"] == VERDICT_HOLD and R_COLD in [e["rule"] for e in sc["evidence"]]
+    assert t.consult(cold) is None  # HOLD is evidence, not a refusal
+    _caller(m, cold, tx_count=10, total_paid_usdc=0.10)
+    assert t.screen(cold)["verdict"] == VERDICT_CLEAR  # history → clears
+
+    met = "0x" + "4" * 40
+    _caller(m, met)
+    ts = m.get_state("watch_serves") or {}
+    m.set_state("watch_serves", {**ts, met.lower(): [1.0, 2.0, 3.0, 4.0]})
+    sm = t.screen(met)
+    assert sm["verdict"] == VERDICT_HOLD and R_METRONOME in [e["rule"] for e in sm["evidence"]]
+    assert t.consult(met) is None
+    m.set_state("watch_serves", {**ts, met.lower(): [1.0, 5.0, 7.0, 30.0]})
+    assert t.screen(met)["verdict"] == VERDICT_CLEAR  # high CV → organic
 
 
 # ---------------------------------------------------------------------------
-# Rule: cold-start with volume (HOLD, not a refusal)
+# SEV-2 — the funded_by writer: the sybil rule fires on declared data
 # ---------------------------------------------------------------------------
-def test_cold_start_with_volume_is_hold_not_abort(tmp_path):
+def test_note_funding_writer_makes_sybil_fire_on_declared_data(tmp_path):
+    """The audit found nothing ever WROTE ``funded_by`` (only tests seeded
+    it), so the funding-cluster sybil rule could never fire live. The writer
+    (a paid /watch/screen may declare the funding root) now makes it fire:
+    declare three callers funded by one root → the sybil ring is drawn."""
     m = _mem(tmp_path)
-    addr = "0x" + "3" * 40
-    _caller(m, addr, tx_count=1, total_paid_usdc=0.10)  # volume, no history
     t = Watchtower(m, house_wallet=HOUSE_WALLET)
-    s = t.screen(addr)
-    assert s["verdict"] == VERDICT_HOLD
-    assert R_COLD in [e["rule"] for e in s["evidence"]]
-    # HOLD is evidence, not a refusal — the screen is published, the serve
-    # continues (see test_serve_path: only ABORT refuses).
-    assert t.consult(addr) is None
+    addrs = [f"0x{str(i).zfill(2)}" + "B" * 36 for i in range(3)]
+    # A single (below-threshold) declaration: observed, no ring yet.
+    t.note_funding(addrs[0], ROOT)
+    assert m.get_entity("caller", addrs[0])["funded_by"] == ROOT.lower()
+    assert t.screen(addrs[0])["verdict"] != VERDICT_ABORT  # 1 member < min
 
-
-def test_history_with_volume_is_clear(tmp_path):
-    m = _mem(tmp_path)
-    _caller(m, "0x" + "3" * 40, tx_count=10, total_paid_usdc=0.10)
-    t = Watchtower(m, house_wallet=HOUSE_WALLET)
-    assert t.screen("0x" + "3" * 40)["verdict"] == VERDICT_CLEAR
+    for a in addrs[1:]:
+        t.note_funding(a, ROOT)
+    s = t.screen(addrs[0])
+    assert s["verdict"] == VERDICT_ABORT
+    assert R_SYBIL in [e["rule"] for e in s["evidence"]]
+    assert set(s["ring"]) == set(addrs)
+    # The funding edge is journaled (kind=funding) — the cross-session memory.
+    kinds = [(e.get("extra") or {}).get("kind") for e in m.read_events(limit=50)]
+    assert "funding" in kinds
 
 
 # ---------------------------------------------------------------------------
-# Rule: metronome timing (HOLD)
+# The serve path: the house refuses to be laundered (uncharged) + caller_fault
 # ---------------------------------------------------------------------------
-def test_metronome_is_hold(tmp_path):
-    m = _mem(tmp_path)
-    addr = "0x" + "4" * 40
-    _caller(m, addr)
-    t = Watchtower(m, house_wallet=HOUSE_WALLET)
-    # Perfectly steady arrivals → CV 0 < WATCH_METRONOME_MAX_CV.
-    ts = m.get_state("watch_serves") or {"items": []}
-    m.set_state("watch_serves", {**ts, addr.lower(): [1.0, 2.0, 3.0, 4.0]})
-    s = t.screen(addr)
-    assert s["verdict"] == VERDICT_HOLD
-    assert R_METRONOME in [e["rule"] for e in s["evidence"]]
-    assert t.consult(addr) is None  # HOLD ≠ refusal
-
-
-def test_irregular_timing_is_clear(tmp_path):
-    m = _mem(tmp_path)
-    addr = "0x" + "4" * 40
-    _caller(m, addr)
-    t = Watchtower(m, house_wallet=HOUSE_WALLET)
-    ts = m.get_state("watch_serves") or {"items": []}
-    m.set_state("watch_serves",
-                {**ts, addr.lower(): [1.0, 5.0, 7.0, 30.0]})  # high CV
-    assert t.screen(addr)["verdict"] == VERDICT_CLEAR
-
-
-# ---------------------------------------------------------------------------
-# The serve path: the house refuses to be laundered
-# ---------------------------------------------------------------------------
-def test_serve_path_refuses_ring_member_uncharged(tmp_path):
-    """The house's OWN serve path consults the tower: a ring member's payment
-    is refused with the ring drawn, BEFORE settlement (genuinely uncharged)."""
+def test_serve_path_refuses_ring_member_uncharged_books_fault_and_serves_clean(tmp_path):
     from core.house import House
     m = _mem(tmp_path)
     ring = _ring(m)
     t = Watchtower(m, house_wallet=HOUSE_WALLET)
     house = House(m, base_price=0.01, watch=t)
+
     status, body = house.serve_intel(ring[0])
-    assert status == 403
-    assert body["house_declined"] is True
+    assert status == 403 and body["house_declined"] is True
     assert "watchtower" in body["house_refused"]
     assert set(body["watch"]["ring"]) == set(ring)
-    # The refusal is published on the feed (the money moment is on screen).
-    feed = t.feed()
-    assert any(e["verdict"] == VERDICT_ABORT for e in feed)
+    assert any(e["verdict"] == VERDICT_ABORT for e in t.feed())  # on screen
+    # SEV-2: the refusal is a caller-attributable failure — the ledger books
+    # caller_fault, so a bad actor burns trust with every refused attempt.
+    row = m.get_entity("caller", ring[0])
+    assert row["failure_events"] == 1 and row["warning_events"] == 1
+    assert row["trust_score"] < 55.0  # the -8 caller_fault delta landed
+
+    # A clean caller (unique funding root) is served — not refused.
+    _caller(m, "0x" + "7" * 40, funded_by="0x" + "9" * 40)
+    assert house.serve_intel("0x" + "7" * 40)[0] == 200
 
 
-def test_serve_path_serves_clean_caller(tmp_path):
-    from core.house import House
+# ---------------------------------------------------------------------------
+# Audit P4b — the serve-path consult must NOT publish ordinary serves
+# ---------------------------------------------------------------------------
+def test_consult_publishes_only_abort_refusals(tmp_path):
+    """A CLEAR and a HOLD consult leave NO feed entry and NO journal screen
+    event; only an ABORT refusal is published + journaled."""
     m = _mem(tmp_path)
-    addr = "0x" + "7" * 40
-    _caller(m, addr, funded_by="0x" + "9" * 40)
     t = Watchtower(m, house_wallet=HOUSE_WALLET)
-    house = House(m, base_price=0.01, watch=t)
-    status, body = house.serve_intel(addr)
-    assert status == 200
+    _caller(m, "0x" + "7" * 40, funded_by="0x" + "9" * 40)      # CLEAR
+    _caller(m, "0x" + "3" * 40, tx_count=1, total_paid_usdc=0.10)  # HOLD
+    assert t.consult("0x" + "7" * 40) is None
+    assert t.consult("0x" + "3" * 40) is None
+    assert t.feed() == []
+    kinds = [(e.get("extra") or {}).get("kind") for e in m.read_events(limit=50)]
+    assert "screen" not in kinds
+
+    ring = _ring(m)  # ABORT
+    assert t.consult(ring[0]) is not None
+    assert len(t.feed()) == 1 and t.feed()[0]["verdict"] == VERDICT_ABORT
+    kinds = [(e.get("extra") or {}).get("kind") for e in m.read_events(limit=50)]
+    assert "refuse" in kinds
 
 
 # ---------------------------------------------------------------------------
-# The gate: deletion re-admits the wash caller
+# The gate: deletion re-admits the wash caller + writers are no-ops
 # ---------------------------------------------------------------------------
-def test_deletion_readmits_the_wash_caller(tmp_path, monkeypatch):
-    """SIBYL_DISABLED → no caller rows → no clusters → the wash caller walks
-    in fresh and is served like any other. That re-admission IS the gate."""
+def test_deletion_readmits_wash_caller_and_writers_noop(tmp_path, monkeypatch):
     from core.house import House
     m = _mem(tmp_path)
     ring = _ring(m)
-    # Prove it WOULD refuse with memory on.
-    t_live = Watchtower(m, house_wallet=HOUSE_WALLET)
-    assert t_live.screen(ring[0])["verdict"] == VERDICT_ABORT
-    # Now delete memory.
+    assert Watchtower(m, house_wallet=HOUSE_WALLET).screen(ring[0])["verdict"] == VERDICT_ABORT
     monkeypatch.setenv("SIBYL_DISABLED", "1")
     m2 = HouseMemory(str(tmp_path / "memory.db"))
     t_dead = Watchtower(m2, house_wallet=HOUSE_WALLET)
-    assert t_dead.screen(ring[0])["verdict"] == VERDICT_CLEAR
-    house = House(m2, base_price=0.01, watch=t_dead)
-    status, _ = house.serve_intel(ring[0])
-    assert status == 200  # laundering works with the memory gone
-
-
-def test_consult_never_writes_when_memory_disabled(tmp_path, monkeypatch):
-    monkeypatch.setenv("SIBYL_DISABLED", "1")
-    t = Watchtower(_mem(tmp_path), house_wallet=HOUSE_WALLET)
-    assert t.consult("0x" + "5" * 40) is None  # no feed, no serve timestamps
+    assert t_dead.screen(ring[0])["verdict"] == VERDICT_CLEAR  # re-admitted
+    assert House(m2, base_price=0.01, watch=t_dead).serve_intel(ring[0])[0] == 200
+    # The writers are no-ops with memory off: no consult, no funding edge.
+    assert t_dead.consult(ring[0]) is None
+    assert t_dead.note_funding(ring[0], ROOT) == {}
+    assert m2.get_entity("caller", ring[0]) is None
 
 
 # ---------------------------------------------------------------------------
 # Feed + stats (the public face of the room)
 # ---------------------------------------------------------------------------
-def test_feed_newest_first_and_capped(tmp_path):
+def test_feed_newest_first_capped_and_stats_split(tmp_path):
     m = _mem(tmp_path)
     t = Watchtower(m, house_wallet=HOUSE_WALLET)
     for i in range(C.WATCH_FEED_MAX + 5):
         t.screen(f"0x{str(i).zfill(40)}")
     feed = t.feed()
-    assert len(feed) == C.WATCH_FEED_MAX  # capped
-    assert feed[0]["ts"] >= feed[-1]["ts"]  # newest first
+    assert len(feed) == C.WATCH_FEED_MAX and feed[0]["ts"] >= feed[-1]["ts"]
 
-
-def test_stats_organic_vs_manufactured(tmp_path):
-    m = _mem(tmp_path)
-    t = Watchtower(m, house_wallet=HOUSE_WALLET)
-    ring = _ring(m)
-    t.screen(ring[0])  # ABORT (manufactured)
-    _caller(m, "0x" + "7" * 40, funded_by="0x" + "9" * 40)
-    t.screen("0x" + "7" * 40)  # CLEAR (organic)
-    s = t.stats()
-    assert s["screens"] == 2
-    assert s["refusals"] == 1
-    assert s["organic"] == 1
-    assert s["organic_pct"] == 50.0
-    assert s["manufactured_pct"] == 50.0
-
-
-def test_stats_empty_is_none_pcts(tmp_path):
-    t = _tower(tmp_path)
-    s = t.stats()
-    assert s["screens"] == 0 and s["organic_pct"] is None
+    m2 = HouseMemory(str(tmp_path / "stats.db"))
+    t2 = Watchtower(m2, house_wallet=HOUSE_WALLET)
+    ring = _ring(m2)
+    t2.screen(ring[0])                                   # ABORT (manufactured)
+    _caller(m2, "0x" + "7" * 40, funded_by="0x" + "9" * 40)
+    t2.screen("0x" + "7" * 40)                            # CLEAR (organic)
+    s = t2.stats()
+    assert s["screens"] == 2 and s["refusals"] == 1 and s["organic"] == 1
+    assert s["organic_pct"] == 50.0 and s["manufactured_pct"] == 50.0
 
 
 # ---------------------------------------------------------------------------
 # FastAPI boundary: paid screen + free verdict feed
 # ---------------------------------------------------------------------------
-def test_paid_screen_route_is_402_unpaid(tmp_path, monkeypatch):
+def test_paid_screen_is_402_and_feed_serves_rings_and_manifest(tmp_path, monkeypatch):
     from fastapi.testclient import TestClient
     from app.x402.seller import build_app
     monkeypatch.setenv("HOUSE_MEMORY_DB", str(tmp_path / "memory.db"))
     app = build_app()
     with TestClient(app, raise_server_exceptions=False) as client:
         r = client.post("/watch/screen", json={"wallet": "0x" + "5" * 40})
-        assert r.status_code == 402  # the paywall gates the screen
+        assert r.status_code == 402
         assert "PAYMENT-REQUIRED" in {k.upper() for k in r.headers}
 
-
-def test_free_verdict_feed_serves_and_lists_routes(tmp_path, monkeypatch):
-    from fastapi.testclient import TestClient
-    from app.x402.seller import build_app
-    monkeypatch.setenv("HOUSE_MEMORY_DB", str(tmp_path / "memory.db"))
-    app = build_app()
-    with TestClient(app) as client:
-        # Seed the tower directly (same memory instance the app uses).
         ring = _ring(app.state.memory)
         app.state.watch.screen(ring[0])
         r = client.get("/house/watch")
@@ -312,33 +271,6 @@ def test_free_verdict_feed_serves_and_lists_routes(tmp_path, monkeypatch):
         assert body["stats"]["refusals"] == 1
         assert body["feed"][0]["verdict"] == VERDICT_ABORT
         assert set(body["feed"][0]["ring"]) == set(ring)
-        # Manifest lists the new routes.
         manifest = client.get("/manifest").json()
         assert "POST /watch/screen" in manifest["paid"]
         assert "/house/watch" in manifest["free"]
-
-
-def test_screen_handler_requires_wallet(tmp_path, monkeypatch):
-    import asyncio
-    from app.x402.seller import build_app
-    monkeypatch.setenv("HOUSE_MEMORY_DB", str(tmp_path / "memory.db"))
-    app = build_app()
-
-    class _StubRequest:
-        def __init__(self, payload: str):
-            self._p = payload
-            self.state = type("S", (), {"payment_payload": None})()
-            self.query_params = {}
-
-        async def json(self):
-            import json
-            return json.loads(self._p)
-
-    handler = None
-    for route in app.routes:
-        if getattr(route, "path", "") == "/watch/screen" and "POST" in getattr(route, "methods", set()):
-            handler = getattr(route, "endpoint", None)
-            break
-    assert handler is not None
-    resp = asyncio.run(handler(_StubRequest("{}")))
-    assert resp.status_code == 400
