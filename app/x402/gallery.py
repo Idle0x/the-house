@@ -990,8 +990,8 @@ __TRYIT_JS__
     L.push("HOW — the x402 flow, step by step:");
     L.push("1. Expect HTTP 402 with a `payment-required` header (base64 JSON). Decode accepts[0]: amount (atomic USDC units), asset contract, payTo (the house wallet), network, maxTimeoutSeconds.");
     L.push("2. Cross-check against the live quote in console section 2 below — amount and payTo MUST match before you sign anything.");
-    L.push("3. Sign an EIP-3009 TransferWithAuthorization via eth_signTypedData_v4 (EIP-712): from = your wallet, to = payTo, value = EXACTLY the quoted amount, validAfter = now, validBefore = now + maxTimeoutSeconds, plus a fresh random 32-byte nonce. Verifying contract = the quoted USDC asset.");
-    L.push("4. Retry the SAME request with header `PAYMENT-RESPONSE: base64({authorization:{from,to,value,validAfter,validBefore,nonce},signature})`. The facilitator settles onchain — you only sign, never broadcast a transaction yourself.");
+    L.push("3. Sign an EIP-3009 TransferWithAuthorization via eth_signTypedData_v4 (EIP-712): from = your wallet, to = payTo, value = EXACTLY the quoted amount, validAfter = 0, validBefore = now + maxTimeoutSeconds, plus a fresh random 32-byte nonce. Verifying contract = the quoted USDC asset. Switch your wallet to Base (chain 8453) before signing.");
+    L.push("4. Retry the SAME request with header `PAYMENT-SIGNATURE: base64({x402Version:2, payload:{authorization:{from,to,value,validAfter,validBefore,nonce},signature}, accepted:<the accepts[0] object from step 1, verbatim>})`. The facilitator verifies and settles onchain — you only sign, never broadcast a transaction yourself.");
     L.push("5. Expect 200 plus a receipt. A 403 (risky / refused) or 404 (unknown entity) means UNCHARGED: do not pay and do not retry.");
     L.push("");
     L.push("CONTEXT — what you are dealing with: the house is a memory-native service. It recalls your wallet before pricing (a trust score can earn you a discount), serves exact repeat requests from memory at net $0 (dedup — ask twice, pay once), and refuses bad actors before money moves. After you are served: "+(f.after||"the house records your wallet and remembers what it served."));
@@ -1097,17 +1097,49 @@ __TRYIT_JS__
 
   // ---------- wallet path ----------
   var wallet = {connected:false, address:null};
+  var BASE_CHAIN_ID = "0x2105"; // Base mainnet 8453 — the only chain the house settles on
+  function ensureBaseChain(){
+    // Returns a promise resolving true when the wallet is on Base. If the
+    // user is on the wrong network, signing would fail or mislead, so we
+    // ask the wallet to switch (or add Base) BEFORE any signature.
+    if(!window.ethereum || !window.ethereum.request){ return Promise.resolve(false); }
+    return window.ethereum.request({method:"eth_chainId"}).then(function(id){
+      if(!id || id.toLowerCase()===BASE_CHAIN_ID){ return true; }
+      return window.ethereum.request({method:"wallet_switchEthereumChain",
+        params:[{chainId:BASE_CHAIN_ID}]}).then(function(){ return true; },
+        function(swErr){
+          if(swErr && swErr.code===4902){
+            return window.ethereum.request({method:"wallet_addEthereumChain", params:[{
+              chainId:BASE_CHAIN_ID, chainName:"Base",
+              nativeCurrency:{name:"Ether",symbol:"ETH",decimals:18},
+              rpcUrls:["https://mainnet.base.org"],
+              blockExplorerUrls:["https://basescan.org"]}]}).then(function(){ return true; });
+          }
+          throw swErr;
+        });
+    }).catch(function(e){
+      toast("switch your wallet to Base first: "+shortErr(e),"err");
+      return false;
+    });
+  }
+  function shortErr(e){
+    var m=(e&&(e.message||e.reason))||String(e==null?"unknown error":e);
+    m=String(m).replace(/^.+?:\s*/,"");
+    return m.slice(0,140);
+  }
   function connectWallet(){
     if(!window.ethereum){
       toast("no injected wallet — install MetaMask or Coinbase Wallet","err");
       return;
     }
     window.ethereum.request({method:"eth_requestAccounts"}).then(function(accs){
+      if(!accs||!accs.length){ toast("no account shared by the wallet","err"); return; }
       wallet.connected=true; wallet.address=accs[0];
       var st=$("wallet-status"); if(st){ st.textContent=wallet.address.slice(0,8)+"…"+wallet.address.slice(-6); }
       var btn=$("wallet-settle"); if(btn){ btn.disabled=false; }
       toast("wallet connected","ok");
-    }).catch(function(e){ toast("connection declined","err"); });
+      ensureBaseChain();
+    }).catch(function(e){ toast("connection failed: "+shortErr(e),"err"); });
   }
   function walletSettle(){
     if(!wallet.connected||!wallet.address){ return; }
@@ -1120,8 +1152,11 @@ __TRYIT_JS__
       return;
     }
     var a=S.liveQuote;
-    // build EIP-712 typed data for EIP-3009 TransferWithAuthorization
+    // build EIP-712 typed data for EIP-3009 TransferWithAuthorization.
+    // validAfter is "0" (no early bound, like the reference x402 client) so a
+    // skewed local clock can never make the authorization start in the future.
     var now=Math.floor(Date.now()/1000);
+    var timeoutSec=(a.maxTimeoutSeconds||600);
     var nonce="0x";
     var arr=new Uint8Array(32); if(window.crypto&&crypto.getRandomValues){ crypto.getRandomValues(arr); }
     for(var i=0;i<arr.length;i++){ nonce+=("0"+arr[i].toString(16)).slice(-2); }
@@ -1132,17 +1167,24 @@ __TRYIT_JS__
       },
       primaryType:"TransferWithAuthorization",
       domain:{name:(a.extra&&a.extra.name)||"USD Coin",version:(a.extra&&a.extra.version)||"2",chainId:8453,verifyingContract:a.asset},
-      message:{from:wallet.address,to:a.payTo,value:parseInt(a.amount,10),validAfter:now,validBefore:now+(a.maxTimeoutSeconds||600),nonce:nonce}
+      message:{from:wallet.address,to:a.payTo,value:String(parseInt(a.amount,10)),validAfter:"0",validBefore:String(now+timeoutSec),nonce:nonce}
     };
-    window.ethereum.request({method:"eth_signTypedData_v4",params:[wallet.address,JSON.stringify(typedData)]})
+    ensureBaseChain().then(function(ok){
+      if(!ok){ throw {message:"aborted: wallet is not on Base"}; }
+      return window.ethereum.request({method:"eth_signTypedData_v4",params:[wallet.address,JSON.stringify(typedData)]});
+    })
       .then(function(sig){
-        // build the exact payload the house server expects
-        var payload={authorization:{from:wallet.address,to:a.payTo,value:String(parseInt(a.amount,10)),validAfter:String(now),validBefore:String(now+(a.maxTimeoutSeconds||600)),nonce:nonce},signature:sig};
+        // x402 v2 envelope: the signed authorization plus the exact quote it
+        // answers, delivered in the PAYMENT-SIGNATURE request header (this is
+        // what the facilitator verifies — a bare authorization is ignored).
+        var payload={x402Version:2,
+          payload:{authorization:{from:wallet.address,to:a.payTo,value:String(parseInt(a.amount,10)),validAfter:"0",validBefore:String(now+timeoutSec),nonce:nonce},signature:sig},
+          accepted:a};
         var header=btoa(JSON.stringify(payload));
-        // re-request with the PAYMENT-RESPONSE header
+        // re-request with the payment attached
         var f=currentFn(); if(!f) return;
         var fields=fnFields(S.fn);
-        var opts={method:f.method,headers:{"Content-Type":"application/json","PAYMENT-RESPONSE":header}};
+        var opts={method:f.method,headers:{"Content-Type":"application/json","PAYMENT-SIGNATURE":header}};
         if(f.method==="POST"){ opts.body=f.body(fields); }
         var url=BASE+f.path+(f.method==="GET"?f.body(fields):"");
         toast("signing…","ok");
@@ -1153,11 +1195,21 @@ __TRYIT_JS__
             // refresh the ledger so the subject list updates
             refreshAll();
           } else {
-            res.text().then(function(t){ toast("settlement not accepted: "+t.slice(0,120),"err"); });
+            // verify failures arrive as a 402 whose payment-required header
+            // carries the facilitator's reason — surface THAT, not the {} body.
+            var why="";
+            try{
+              var rpr=res.headers.get("payment-required");
+              if(rpr){ var rq=JSON.parse(atob(rpr)); if(rq&&rq.error){ why=rq.error; } }
+            }catch(ee){}
+            res.text().then(function(t){
+              var detail=(t&&t.length>2?t.slice(0,120):"");
+              toast("settlement not accepted"+(why?": "+String(why).slice(0,160):"")+(detail?" — "+detail:""),"err");
+            });
           }
-        }).catch(function(){ toast("settlement failed","err"); });
+        }).catch(function(e){ toast("settlement failed: "+shortErr(e),"err"); });
       })
-      .catch(function(e){ toast("signature declined","err"); });
+      .catch(function(e){ toast("signature failed: "+shortErr(e),"err"); });
   }
   function renderArtifact(payer,a){
     var el=$("artifact-body"); if(!el) return;
@@ -1447,8 +1499,14 @@ __TRYIT_JS__
   function legacyCopy(text){
     var ta=document.createElement("textarea");ta.value=text;ta.style.position="fixed";ta.style.opacity="0";
     document.body.appendChild(ta);ta.select();
-    try{document.execCommand("copy");toast("copied","ok");}catch(e){toast("select the command manually","err");}
+    // execCommand returns false (not throw) when the browser refuses — the
+    // old code toasted "copied" regardless, i.e. a silent failed copy.
+    var done=false;
+    try{done=document.execCommand("copy");}catch(e){done=false;}
     document.body.removeChild(ta);
+    if(done){toast("copied","ok");}
+    else if(window.prompt){window.prompt("Copy manually (Ctrl+C, then Enter):",text);}
+    else{toast("select the command manually","err");}
   }
 
   // ---------- mobile pane switch ----------
