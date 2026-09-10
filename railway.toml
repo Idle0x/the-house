@@ -1,0 +1,20 @@
+# Railway — primary deploy for THE HOUSE
+# https://docs.railway.app — `railway init && railway up` (or connect the repo)
+#
+# What Railway does for us:
+#   * builds the Dockerfile automatically (Nixpacks/Railpack detect it)
+#   * gives a public HTTPS domain (your-house.up.railway.app)
+#   * $PORT is set for us — the container CMD honors it
+#   * persistent VOLUME below survives redeploys/restarts -> memory.db is safe
+#
+# Secrets to set in the Railway dashboard (Project -> Variables), names only:
+#   CDP_API_KEY_ID, CDP_API_KEY_SECRET, HOUSE_WALLET, HOUSE_NETWORK,
+#   HOUSE_USDC_BASE, HOUSE_AGENT_ID, HOUSE_AGENT_NAME
+#   (receive-side only. Leave HOUSE_LIVE_MONEY_OUT unset = OFF -> never sends.)
+#   Optional ACP (only if you want ACP on the public deploy):
+#   ACP_OWNER_WALLET, ACP_ACCESS_TOKEN, ACP_REFRESH_TOKEN, ACP_WALLET_RPC_URL
+
+[vars]
+HOUSE_MEMORY_DB = "/data/memory.db"
+HOUSE_PORT = "8000"
+PYTHONUNBUFFERED = "1"

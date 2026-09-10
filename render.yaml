@@ -1,0 +1,40 @@
+# Render — fallback deploy for THE HOUSE
+# https://render.com/docs — New+ -> Blueprint (this file), or create manually
+#
+# Render notes:
+#   * runtime: docker (uses the Dockerfile at repo root)
+#   * a Web Service gets a public https://<name>.onrender.com domain + free TLS
+#   * $PORT is injected -> the CMD honors it
+#   * PERSISTENCE: attach a Disk mounted at /data (paid ~$0.24/hr) so memory.db
+#     survives restarts. Blueprints can't declare disks — add it in the dashboard
+#     (Service -> Disks -> Add, mountPath /data) or:  render attach-disk the-house /data
+#     Without it, memory resets on every redeploy (acceptable for a demo, not prod).
+#
+# Secrets (Render service -> Environment), names only:
+#   CDP_API_KEY_ID, CDP_API_KEY_SECRET, HOUSE_WALLET, HOUSE_NETWORK,
+#   HOUSE_USDC_BASE, HOUSE_AGENT_ID, HOUSE_AGENT_NAME
+#   Leave HOUSE_LIVE_MONEY_OUT unset = OFF (the public deploy never sends).
+
+services:
+  - type: web
+    name: the-house
+    runtime: docker
+    plan: starter
+    healthCheckPath: /house/ledger
+    envVars:
+      - key: HOUSE_MEMORY_DB
+        value: /data/memory.db
+      - key: CDP_API_KEY_ID
+        sync: false
+      - key: CDP_API_KEY_SECRET
+        sync: false
+      - key: HOUSE_WALLET
+        sync: false
+      - key: HOUSE_NETWORK
+        sync: false
+      - key: HOUSE_USDC_BASE
+        sync: false
+      - key: HOUSE_AGENT_ID
+        sync: false
+      - key: HOUSE_AGENT_NAME
+        sync: false

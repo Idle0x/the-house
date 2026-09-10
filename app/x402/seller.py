@@ -29,7 +29,9 @@ model collapses to a stateless price list (that is the gate).
 from __future__ import annotations
 
 import logging
+import asyncio
 import os
+import re
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -42,7 +44,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, Response
 from core.identity import require_wallet
 from core.redact import redact_text, redact_value
 
-from app.x402.landing import render_landing
+from app.x402.landing import build_landing_state, render_landing
 from app.x402.gallery import render_gallery
 from core.bonds import UnderwritingDesk
 from core.acp import ACPDelegator
@@ -55,6 +57,7 @@ from core.scout import SCOUT_HIRE_PRICE, SCOUT_REPORT_BASE, FrontOffice
 from core.settle_journal import decode_settlement_header
 from core.wallet import HouseWallet, USDC_BASE
 from core.watch import Watchtower
+from core.wipe import WipeController
 
 load_dotenv(Path(__file__).resolve().parents[2] / ".env")
 
@@ -63,6 +66,39 @@ log = logging.getLogger("the-house.seller")
 NETWORK = os.getenv("HOUSE_NETWORK", "eip155:8453")
 BASE_PRICE = float(os.getenv("HOUSE_BASE_PRICE", "0.01"))  # USDC list price
 SERVICE_NAME = os.getenv("HOUSE_SERVICE_NAME", "the-house")
+
+# Recorded status of the three real ACP jobs (Sep 7 — verified on Base mainnet
+# via the ACP index: all completed, escrow funded + released). Used ONLY when
+# the acp CLI is unavailable; the response then carries live=false so the page
+# never presents a recorded status as a live read.
+_ACP_FALLBACK = {
+    "77330": {"provider": "0x436f324eff0b32a405c5b9102e1a6ef85451cec1",
+              "provider_name": "BitsAndBytesBack",
+              "offering": "prompt_optimization", "escrow_usdc": 0.02,
+              "escrow_tx": "0x939a1fc8ab94d5aeed5725aaca6e6c96122a5d95c624e835a045855b5492a277"},
+    "77332": {"provider": "0xec4bc04310925326ff80daf419a3861173865689",
+              "provider_name": "aiworker-data",
+              "offering": "page_markdown", "escrow_usdc": 0.02,
+              "escrow_tx": "0xebcf9d0c137b5216df45fe49a6187ae4a3e3c76bc378cdcece9003d283ec756a"},
+    "77338": {"provider": "0xecf9773b50f01f3a97b087a6ecdf12a71afc558c",
+              "provider_name": "TheMetaBot",
+              "offering": "agentRiskCheck", "escrow_usdc": 0.05,
+              "escrow_tx": "0xfce202ce19be3d9359e4ba4a5181342b1bd6f02153b0c05ee65a8c38a7206d30"},
+}
+
+
+def _ACP_FALLBACK_JOBS() -> list[dict]:
+    return [{
+        "job_id": jid,
+        "status": "completed (recorded)",
+        "offering": spec["offering"],
+        "escrow_usdc": spec["escrow_usdc"],
+        "escrow_tx": spec["escrow_tx"],
+        "provider": spec["provider"],
+        "provider_name": spec["provider_name"],
+        "completed_reason": None,
+        "recorded": True,
+    } for jid, spec in _ACP_FALLBACK.items()]
 
 # The x402 header that carries the base64 SettleResponse (tx hash, payer, amt).
 # Imported lazily to avoid an import-time dependency in unit tests.
@@ -210,12 +246,45 @@ async def lifespan(app: FastAPI):
     """F4: on startup verify the wallet and resume/re-drive stalled jobs
     (kill -9 → wake up, finish, settle idempotently). Under SIBYL_DISABLED the
     null memory holds no jobs — resume is a no-op (idempotency died with the
-    memory, the deletion degradation)."""
+    memory, the deletion degradation).
+
+    Also runs a background self-heal loop: a soft-off (disable) re-enables the
+    house automatically after its 15-minute window, even if nobody is watching
+    the landing page. Purge is permanent and never self-heals.
+    """
     house: House = app.state.house  # type: ignore[attr-defined]
     info = house.startup()
     log.info("startup: wallet_ok=%s resumed=%d driven=%s",
              info["wallet_ok"], info["resumed"], info["driven"])
-    yield
+
+    # Background auto-re-enable for the reversible soft-off (disable). Purge
+    # is permanent — this loop never touches a purged store.
+    stop = asyncio.Event()
+
+    async def _auto_reenable_loop() -> None:
+        while not stop.is_set():
+            try:
+                wipe: WipeController = app.state.wipe  # type: ignore[attr-defined]
+                memory: HouseMemory = app.state.memory  # type: ignore[attr-defined]
+                if wipe.maybe_auto_reenable(memory):
+                    log.info("memory: auto re-enabled after 5-min soft-off")
+            except Exception:  # noqa: BLE001 - never kill the loop
+                pass
+            try:
+                await asyncio.wait_for(stop.wait(), timeout=5)
+            except asyncio.TimeoutError:
+                continue
+
+    task = asyncio.create_task(_auto_reenable_loop())
+    try:
+        yield
+    finally:
+        stop.set()
+        task.cancel()
+        try:
+            await task
+        except (asyncio.CancelledError, Exception):  # noqa: BLE001
+            pass
 
 
 def _git_commit() -> str:
@@ -251,9 +320,45 @@ def _repo_url() -> str:
         if url.startswith("git@") and ":" in url:
             hostpath = url.split("@", 1)[1]
             url = "https://" + hostpath.replace(":", "/", 1)
-        return url.rstrip("/")
+        return url.rstrip("/").removesuffix(".git")
     except Exception:  # noqa: BLE001
         return ""
+
+
+def _client_ip(request: Request) -> str:
+    """Best-effort client IP for the deletion gate's per-IP cooldown.
+
+    Behind a proxy the real IP is in X-Forwarded-For; fall back to the peer.
+    This is a demo-grade guard, not a security boundary — see core/wipe.py."""
+    fwd = request.headers.get("x-forwarded-for", "")
+    if fwd:
+        return fwd.split(",")[0].strip()
+    client = request.client
+    return client.host if client else "unknown"
+
+
+def _public_url(request: Request) -> str:
+    """Externally reachable origin for the try-it commands.
+
+    Prefers the explicit ``HOUSE_PUBLIC_URL`` env (set to the Railway domain
+    in production). When unset, derives the origin from the request's Host
+    header (with the proxy's X-Forwarded-Proto), so the page works on any
+    deploy without configuration. Never emits an internal IP/localhost: if
+    the derived host looks internal, it is suppressed (try-it falls back to
+    the relative /house/* form)."""
+    env = os.getenv("HOUSE_PUBLIC_URL", "").strip().rstrip("/")
+    if env:
+        return env
+    host = request.headers.get("host", "").strip()
+    if not host:
+        return ""
+    scheme = (request.headers.get("x-forwarded-proto", "") or "").split(",")[0].strip().lower() or "https"
+    # suppress internal-looking hosts — the try-it flow must not print a
+    # raw IP / localhost / tunnel name
+    h = host.split(":")[0].lower()
+    if h in ("localhost", "127.0.0.1", "0.0.0.0", "::1") or h.startswith("192.168.") or h.startswith("10.") or h.startswith("172.16.") or h.startswith("172.17.") or ".local" in h or ".internal" in h or ".duckdns" in h or h.endswith(".ngrok.io") or h.endswith(".localtunnel.me"):
+        return ""
+    return f"{scheme}://{host}"
 
 
 def build_app() -> FastAPI:
@@ -281,6 +386,13 @@ def build_app() -> FastAPI:
     db_path = os.getenv("HOUSE_MEMORY_DB",
                         str(Path(__file__).resolve().parents[2] / "data" / "memory.db"))
     memory = HouseMemory(db_path)
+
+    # The public memory gate: anyone can really disable (soft-off, reversible,
+    # self-heals after 15 min) or purge (true, permanent deletion) the memory
+    # and watch the product collapse. Purge is irreversible and guarded — 2h
+    # per-IP cooldown + 3/day per-IP cap. Disable is non-destructive with a
+    # light 3-per-2h rolling limit. See core/wipe.py.
+    wipe = WipeController()
 
     # ---- money-out: SAFE-BY-DEFAULT (DryRun) unless explicitly enabled ----
     # The house RECEIVES via CDP x402 (always, when CDP creds are present).
@@ -484,6 +596,7 @@ def build_app() -> FastAPI:
     app.state.front = front
     app.state.acp = acp
     app.state.dossier = dossier
+    app.state.wipe = wipe
 
     # ---- free routes (never gated) ---------------------------------------
     @app.get("/manifest", include_in_schema=False)
@@ -518,25 +631,49 @@ def build_app() -> FastAPI:
         }
 
     @app.get("/", include_in_schema=False, response_class=HTMLResponse)
-    def route_landing():
+    def route_landing(request: Request):
         """The house's own landing page — a live mirror of the house's state.
-        Every number is rendered server-side from the real aggregates, so in
-        deletion mode (memory disabled) the page itself reads the collapse."""
+        Every number is rendered from the real aggregates (memory entities,
+        dedup, front office, onchain history, wipe controller), so in deletion
+        mode the page itself reads the collapse."""
         ds = house.dedup.stats()
-        return HTMLResponse(render_landing(
-            memory_live=not memory.disabled(),
-            settlements=house.journal.count(),
-            usdc_settled=house.journal.total_usdc(),
-            repeats_cached=int(ds.get("hits", 0)),
-            usdc_saved=float(ds.get("usdc_saved", 0.0)),
-            scars=len(memory.list_entities("scar", limit=500)),
-            active_rules=len(house.scars.active_rules()),
-            live_callers=len(memory.list_entities("caller", limit=200)),
+        callers = []
+        for row in memory.list_entities("caller", limit=200):
+            addr = row.get("address", "")
+            callers.append({
+                "address": addr,
+                "address_last6": addr[-6:] if addr else "?",
+                "segment": row.get("segment"),
+                "trust_score": row.get("trust_score"),
+                "tx_count": row.get("tx_count"),
+                "net_charged_usdc": round(float(row.get("total_paid_usdc", 0.0) or 0.0), 6),
+            })
+        providers = []
+        for row in (front.board().get("board") or []):
+            providers.append({
+                "provider": row.get("provider"),
+                "provider_last6": row.get("provider_last6"),
+                "segment": row.get("segment"),
+                "hired": row.get("hired"),
+                "jobs_done": row.get("jobs_done"),
+                "quality_score": row.get("quality_score"),
+            })
+        wipe: WipeController = request.app.state.wipe  # type: ignore[assignment]
+        state = build_landing_state(
+            memory_mode=memory.mode,
+            callers=callers,
+            providers=providers,
+            dedup=ds,
+            scars_total=len(memory.list_entities("scar", limit=500)),
+            scars_rules=len(house.scars.active_rules()),
             commit=_git_commit(),
             base_price=house.base_price,
             repo_url=_repo_url(),
+            public_url=_public_url(request),
             ts=time.strftime("%Y-%m-%d %H:%M UTC", time.gmtime()),
-        ))
+            wipe_status=wipe.status(_client_ip(request)),
+        )
+        return HTMLResponse(render_landing(state))
 
     @app.get("/gallery", include_in_schema=False, response_class=HTMLResponse)
     def route_gallery():
@@ -548,6 +685,7 @@ def build_app() -> FastAPI:
             commit=_git_commit(),
             base_price=house.base_price,
             ts=time.strftime("%Y-%m-%d %H:%M UTC", time.gmtime()),
+            public_url=os.getenv("HOUSE_PUBLIC_URL", "").strip().rstrip("/"),
         ))
 
     @app.get("/house/journal", include_in_schema=False)
@@ -745,6 +883,127 @@ def build_app() -> FastAPI:
         house remembers, with segment + terms. Deletion → empty board."""
         front: FrontOffice = request.app.state.front  # type: ignore[assignment]
         return {"house": SERVICE_NAME, **front.board()}
+
+    # ---- the public memory gate (disable / purge) --------------------
+    @app.get("/house/memory/status", include_in_schema=False)
+    def route_memory_status(request: Request):
+        """The memory gate's current state — for the landing page countdown."""
+        wipe: WipeController = request.app.state.wipe  # type: ignore[assignment]
+        return {"house": SERVICE_NAME, "memory": wipe.status(_client_ip(request))}
+
+    @app.post("/house/memory/purge", include_in_schema=False)
+    def route_memory_purge(request: Request):
+        """TRUE, PERMANENT deletion gate. Anyone can purge the memory and watch
+        the product collapse to cold-start. Irreversible — there is no restore
+        and no countdown: once purged, the store is gone. Guarded (see
+        core/wipe.py): 2h per-IP cooldown + 3/day per-IP cap. This is why the
+        reversible soft-off (disable) exists."""
+        wipe: WipeController = request.app.state.wipe  # type: ignore[assignment]
+        memory: HouseMemory = request.app.state.memory  # type: ignore[assignment]
+        ok, reason, st = wipe.try_purge(memory, ip=_client_ip(request))
+        return JSONResponse(
+            {"house": SERVICE_NAME, "ok": ok, "reason": reason, "memory": st},
+            status_code=200 if ok else 429,
+        )
+
+    @app.post("/house/memory/disable", include_in_schema=False)
+    def route_memory_disable(request: Request):
+        """SOFT off (the recommended memory mode): memory stops reading and
+        writing, but the store persists untouched. Reversible — it self-heals
+        after 15 minutes in the background, or anyone can re-enable instantly
+        via /enable. No re-seed, all remembered state returns. Non-destructive,
+        so it carries only a light rolling rate limit (3 per 2h per IP)."""
+        wipe: WipeController = request.app.state.wipe  # type: ignore[assignment]
+        memory: HouseMemory = request.app.state.memory  # type: ignore[assignment]
+        ok, reason, st = wipe.try_disable(memory, ip=_client_ip(request))
+        return JSONResponse(
+            {"house": SERVICE_NAME, "ok": ok, "reason": reason, "memory": st},
+            status_code=200 if ok else 429,
+        )
+
+    @app.post("/house/memory/enable", include_in_schema=False)
+    def route_memory_enable(request: Request):
+        """Instant re-enable after a soft-off. Data was never destroyed, so
+        nothing is re-seeded — the house simply starts remembering again."""
+        wipe: WipeController = request.app.state.wipe  # type: ignore[assignment]
+        memory: HouseMemory = request.app.state.memory  # type: ignore[assignment]
+        st = wipe.enable(memory)
+        return {"house": SERVICE_NAME, "ok": True, "memory": st}
+
+    # ---- ACP agent rail (free reads) ------------------------------------- #
+    app.state.acp_job_ids = ["77330", "77332", "77338"]  # real jobs, Sep 7
+    app.state.acp_jobs_cache = {"at": 0.0, "jobs": [], "live": False}
+
+    @app.get("/house/acp/jobs", include_in_schema=False)
+    def route_acp_jobs(request: Request):
+        """Live ACP job status straight from the onchain index (real CLI
+        read, cached 60s so a page load costs one read). If the CLI is
+        unavailable the response says so and falls back to the recorded
+        Sep 7 statuses — never a silent fake 'live'."""
+        acp = request.app.state.acp  # type: ignore[attr-defined]
+        cache = request.app.state.acp_jobs_cache  # type: ignore[attr-defined]
+        import time as _t
+        now = _t.time()
+        if cache["live"] and now - cache["at"] < 60:
+            jobs, live = cache["jobs"], True
+        else:
+            try:
+                jobs = acp.jobs_summary(request.app.state.acp_job_ids)
+                cache.update(at=now, jobs=jobs, live=True)
+                live = True
+            except FileNotFoundError:
+                jobs = _ACP_FALLBACK_JOBS()
+                cache.update(at=now, jobs=jobs, live=False)
+                live = False
+        # Offering name + escrow tx are fixed job identity (not in the
+        # history events) — annotate from the recorded map so cards always
+        # carry the Basescan-verifiable proof.
+        for j in jobs:
+            spec = _ACP_FALLBACK.get(str(j.get("job_id")))
+            if spec:
+                j.setdefault("offering", spec["offering"])
+                j.setdefault("escrow_tx", spec["escrow_tx"])
+                j.setdefault("provider_name", spec["provider_name"])
+        return {"house": SERVICE_NAME, "live": live,
+                "chain_id": acp.chain_id, "jobs": jobs}
+
+    @app.get("/house/acp/terms", include_in_schema=False)
+    def route_acp_terms(request: Request):
+        """Free live terms read: what the house WOULD offer a provider right
+        now, from what it remembers. The same pure function the paid
+        /scout/hire ruling and the real delegation use — exposed free so the
+        agent rail can be exercised without paying. With memory disabled the
+        recall returns nothing: every provider is a stranger at standard
+        terms (the deletion-safe path, shown for real)."""
+        provider = str(request.query_params.get("provider", "")).strip()
+        if not re.fullmatch(r"0x[0-9a-fA-F]{40}", provider):
+            return JSONResponse(status_code=400, content={
+                "house": SERVICE_NAME,
+                "error": "provider must be a 0x-prefixed 40-char address"})
+        front: FrontOffice = request.app.state.front  # type: ignore[attr-defined]
+        memory: HouseMemory = request.app.state.memory  # type: ignore[attr-defined]
+        decision = front.decision(provider)
+        # The no-memory comparison: the SAME terms function with no recalled
+        # row (exactly what a disabled/purged recall returns). It is a
+        # simulation of the deletion-safe path, not a live second read —
+        # flagged as such so the page never blurs real vs computed.
+        from core.acp import terms_from_row
+        nm = terms_from_row(None)
+        no_memory = {
+            "segment": nm.segment,
+            "hired": not nm.skip,
+            "refused": nm.skip,
+            "reason": nm.reason,
+            "strict_review": nm.strict_review,
+        }
+        return {
+            "house": SERVICE_NAME,
+            "memory": memory.mode,  # live | disabled | purged
+            "memory_live": not memory.disabled(),
+            "no_memory_terms": no_memory,
+            "no_memory_is_simulation": True,
+            **decision,
+        }
 
     # ---- paid handler (only reachable after x402 verification) ------------
     @app.post("/bond/quote")
@@ -1060,6 +1319,27 @@ def build_app() -> FastAPI:
     app.add_middleware(
         make_journal_middleware(house.journal),
         routes=routes, server=server)
+
+    # ---- serve-time memory confirmation --------------------------------- #
+    # Every response — paid or free — is stamped with the memory state the
+    # house was actually in while it produced that response. This is the
+    # public confirmation that a discount / dedup / refusal was decided with
+    # memory ON, and that a flat base-price serve happened with it OFF. It is
+    # a header (visible to anyone, checkable in devtools or curl), not a
+    # toast the client could lie about.
+    @app.middleware("http")
+    async def _stamp_memory_state(request: Request, call_next):
+        response = await call_next(request)
+        response.headers["X-House-Memory"] = memory.mode
+        # the mode is also the reason: a discount/dedup means the house READ
+        # memory; an off-mode means every wallet was treated as a stranger.
+        response.headers["X-House-Memory-Note"] = (
+            "decided with memory on; recall ran before pricing"
+            if memory.mode == "live"
+            else "decided with memory off; the house was blind to this wallet"
+        )
+        return response
+
     return app
 
 

@@ -68,7 +68,15 @@ def terms_from_row(row: Optional[dict]) -> ProviderTerms:
     on_time = float(row.get("on_time", 0.0))
     defaults = int(row.get("default_events", 0))
     jobs = int(row.get("jobs_done", 0))
-    if quality < RISKY_MAX_QUALITY or defaults >= 1:
+    # A quality_score of 0.0 means "never measured", not "measured 0" — so it
+    # only counts against a provider when quality was actually assessed. A
+    # provider that completed real jobs without a quality reading is a thin
+    # record (unknown), never "risky".
+    # "Assessed" = the flag is set, OR the row shows real completed jobs with a
+    # non-zero reading (a measured low quality is a measured low quality even
+    # if the flag was written before the flag existed).
+    assessed = bool(row.get("quality_assessed", False)) or (jobs >= 1 and quality > 0)
+    if defaults >= 1 or (assessed and quality < RISKY_MAX_QUALITY):
         return ProviderTerms(
             "risky",
             f"bad record: quality {quality:.2f}, defaults {defaults} — "
@@ -118,6 +126,7 @@ class ACPDelegator:
             "on_time_jobs": 0,
             "quality_sum": 0.0,
             "quality_score": 0.0,
+            "quality_assessed": False,  # no job completed yet
             "on_time": 0.0,
             "total_escrow_usdc": 0.0,
             "default_events": 0,
@@ -141,6 +150,7 @@ class ACPDelegator:
             "on_time_jobs": on_time_jobs,
             "quality_sum": qsum,
             "quality_score": round(qsum / jobs, 4),
+            "quality_assessed": True,  # a real job produced a real reading
             "on_time": round(on_time_jobs / jobs, 4),
             "total_escrow_usdc": round(float(row.get("total_escrow_usdc", 0.0))
                                        + escrow_usdc, 6),
@@ -171,6 +181,58 @@ class ACPDelegator:
     def _history(self, job_id: str) -> dict:
         return self._acp("job", "history", "--job-id", job_id,
                          "--chain-id", str(self.chain_id))
+
+    def job_history(self, job_id: str) -> dict:
+        """Live onchain job record from the ACP index (real CLI read).
+
+        Returns a normalized view: status, escrow amount, provider, and the
+        completion reason hash (the onchain completion record). A job the
+        index does not know about raises — callers surface that as a real
+        'not found', never as an invented status.
+        """
+        h = self._acp("job", "history", "--job-id", job_id,
+                      "--chain-id", str(self.chain_id), timeout=20)
+        if not h.get("entries"):
+            raise RuntimeError(f"job {job_id} not found on chain {self.chain_id}")
+        amount = 0.0
+        provider = ""
+        completed_reason = None
+        for entry in h["entries"]:
+            ev = entry.get("event") or {}
+            t = ev.get("type")
+            if t == "budget.set" and float(ev.get("amount", 0)) > 0:
+                amount = float(ev["amount"])
+            elif t == "job.created":
+                provider = str(ev.get("provider", ""))
+            elif t == "job.completed":
+                completed_reason = ev.get("reason")
+        return {
+            "job_id": str(job_id),
+            "status": str(h.get("status", "")),
+            "escrow_usdc": round(amount, 4),
+            "provider": provider,
+            "completed_reason": completed_reason,
+        }
+
+    def jobs_summary(self, job_ids: list[str]) -> list[dict]:
+        """Batch job_history with honest per-job errors (no silent drops).
+
+        The per-job CLI reads are independent, so they run concurrently — a
+        cold read of N jobs costs ~one CLI round-trip, not N. Order is
+        preserved; a job that errors is reported, never dropped.
+        """
+        if not job_ids:
+            return []
+        from concurrent.futures import ThreadPoolExecutor
+        def _one(jid: str) -> dict:
+            try:
+                return self.job_history(jid)
+            except Exception as exc:  # noqa: BLE001 - report, don't hide
+                return {"job_id": str(jid), "status": "unavailable",
+                        "error": str(exc)[:200], "escrow_usdc": 0.0,
+                        "provider": "", "completed_reason": None}
+        with ThreadPoolExecutor(max_workers=len(job_ids)) as ex:
+            return list(ex.map(_one, job_ids))
 
     def _find_event(self, history: dict, etype: str) -> Optional[dict]:
         for entry in history.get("entries", []):
