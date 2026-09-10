@@ -93,14 +93,89 @@ class HouseMemory:
     """Thin, normalized wrapper over the Sibyl Memory client (free tier)."""
 
     def __init__(self, db_path: str | Path = DEFAULT_DB) -> None:
+        self._null: Any = _NullMemory()
         self._disabled = memory_disabled()
         if self._disabled:
-            self._m: Any = _NullMemory()
+            self._m: Any = self._null
+            self._real_m: Any = self._null
         else:
             # Ensure the parent dir exists for local file mode.
             Path(db_path).expanduser().parent.mkdir(parents=True, exist_ok=True)
-            self._m = MemoryClient.local(str(Path(db_path).expanduser()))
+            self._real_m = MemoryClient.local(str(Path(db_path).expanduser()))
+            self._m = self._real_m
         self.db_path = str(db_path)
+        # Runtime mode: "live" | "disabled" (soft off, data kept) | "purged"
+        # (true deletion). The env flag only governs the initial state.
+        self._mode: str = "disabled" if self._disabled else "live"
+
+    # ------------------------------------------------------------------ #
+    # Runtime wipe — the public memory gate. Wipe is a TRUE, PERMANENT
+    # deletion: the underlying store is closed and its file removed, so the
+    # recalled state (entities, dedup, scars, trust, journal) is genuinely
+    # gone — the house is blind, and remembers nothing, including its own
+    # purge. There is no restore and no re-seed: purge is irreversible, which
+    # is why the reversible soft-off (disable) exists. The env flag
+    # SIBYL_DISABLED still governs the initial state; the runtime flag is an
+    # additional override on top of it.
+    # ------------------------------------------------------------------ #
+    @property
+    def purged(self) -> bool:
+        """True when the runtime deletion gate (true deletion) is active."""
+        return self._mode == "purged"
+
+    @property
+    def mode(self) -> str:
+        """live | disabled (soft off, data kept) | purged (deleted)."""
+        return self._mode
+
+    def disable(self) -> None:
+        """SOFT off: reads empty, writes no-op, but the underlying store
+        persists untouched. Reversible instantly via enable() — no re-seed,
+        all remembered state comes back intact. This is the 'unplug' mode:
+        the house stops remembering but forgets nothing."""
+        if self._mode != "live":
+            return
+        self._m = self._null
+        self._mode = "disabled"
+
+    def enable(self) -> None:
+        """Reconnect after disable — data intact, no re-seed needed."""
+        if self._mode != "disabled":
+            return
+        if self._real_m is self._null:
+            return  # deletion harness: nothing real to reconnect to
+        self._m = self._real_m
+        self._mode = "live"
+
+    def wipe(self) -> None:
+        """TRUE, PERMANENT deletion: close the store, remove its file,
+        recreate empty. The house is blind — every read returns empty, every
+        write no-ops. There is no way back: purge is irreversible."""
+        if self._real_m is not self._null:
+            try:
+                self._real_m.storage.close()
+            except Exception:  # noqa: BLE001 - best-effort close
+                pass
+            try:
+                p = Path(self.db_path).expanduser()
+                if p.exists():
+                    p.unlink()
+            except Exception:  # noqa: BLE001 - best-effort unlink
+                pass
+            # recreate an empty store at the same path
+            try:
+                Path(self.db_path).expanduser().parent.mkdir(parents=True, exist_ok=True)
+                self._real_m = MemoryClient.local(str(Path(self.db_path).expanduser()))
+            except Exception:  # noqa: BLE001 - if recreate fails, stay null
+                self._real_m = self._null
+        self._m = self._null
+        self._mode = "purged"
+
+    def restore(self) -> None:
+        """Legacy reconnect helper — retained for the deletion harness. NOTE:
+        purge is irreversible; nothing in the app calls restore anymore."""
+        self._m = self._real_m
+        self._mode = "live"
 
     # ------------------------------------------------------------------ #
     # WARM entities (caller, provider, scar)
@@ -217,4 +292,6 @@ class HouseMemory:
 
     # ------------------------------------------------------------------ #
     def disabled(self) -> bool:
-        return self._disabled
+        # True in both off-states: disabled (soft, data kept) and wiped
+        # (true deletion). The runtime mode overrides the env flag.
+        return self._mode != "live"

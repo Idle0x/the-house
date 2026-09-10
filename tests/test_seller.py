@@ -51,7 +51,11 @@ def test_landing_reads_state_live_and_collapses_disabled(tmp_path, monkeypatch):
     assert r.status_code == 200 and "text/html" in r.headers["content-type"]
     page = r.text
     assert "THE" in page and "HOUSE" in page
-    assert "why memory is load-bearing" in page and "MEMORY LIVE" in page
+    # new landing page: the section header is uppercased by CSS but stored
+    # lowercase in the HTML; the memory status is injected into the state
+    # blob (window.__HOUSE__) and rendered client-side.
+    assert "why memory is load-bearing" in page
+    assert '"memory": "live"' in page
     m = client.get("/manifest")
     assert m.status_code == 200 and m.json()["service"] == "the-house"
     assert m.json()["memory"] in ("live", "disabled")
@@ -66,7 +70,7 @@ def test_landing_reads_state_live_and_collapses_disabled(tmp_path, monkeypatch):
     app2 = build_app()
     client2 = TestClient(app2)
     page2 = client2.get("/").text
-    assert "MEMORY DISABLED" in page2 and "collapse show" in page2
+    assert '"memory": "disabled"' in page2
     manifest2 = client2.get("/manifest").json()
     assert manifest2["memory"] == "disabled"
     assert manifest2["stats"]["settlements"] == 0

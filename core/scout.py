@@ -194,6 +194,7 @@ class FrontOffice:
                 continue
             terms = terms_from_row(p)
             rows.append({
+                "provider": addr,
                 "provider_last6": addr[-6:],
                 "segment": terms.segment,
                 "hired": not terms.skip,

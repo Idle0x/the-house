@@ -1,0 +1,667 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>the-house · gallery — workbench mockup</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg:#07090B; --surface:#0D1013; --surface2:#12161A; --inset:#090B0E;
+    --border:rgba(255,255,255,.07); --border2:rgba(255,255,255,.11);
+    --text:#F2F5F7; --muted:#79808A; --dim:#A9B2BC;
+    --glacier:#8FC7FF; --glacier-deep:#4E8FE0; --glacier-dim:rgba(143,199,255,.10);
+    --green:#27AE60; --green-dim:rgba(39,174,96,.12); --red:#C0392B; --red-dim:rgba(192,57,43,.12);
+    --amber:#E8C547;
+    --grotesk:"Space Grotesk",system-ui,-apple-system,"Segoe UI",sans-serif;
+    --mono:"Space Mono",ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+  }
+  *{box-sizing:border-box;margin:0;padding:0;}
+  html,body{background:var(--bg);color:var(--text);font-family:var(--grotesk);
+    -webkit-font-smoothing:antialiased;line-height:1.55;}
+  a{color:inherit;text-decoration:none;}
+  body{padding-bottom:80px;}
+  .ambient{position:fixed;inset:0;z-index:0;pointer-events:none;overflow:hidden;}
+  .grid-bg{position:absolute;inset:0;
+    background-image:linear-gradient(rgba(143,199,255,.03) 1px,transparent 1px),
+      linear-gradient(90deg,rgba(143,199,255,.03) 1px,transparent 1px);
+    background-size:56px 56px;
+    -webkit-mask-image:radial-gradient(ellipse 80% 60% at 50% 0%,#000 30%,transparent 75%);
+            mask-image:radial-gradient(ellipse 80% 60% at 50% 0%,#000 30%,transparent 75%);}
+  .glow{position:absolute;border-radius:50%;filter:blur(90px);opacity:.4;}
+  .glow.a{width:520px;height:520px;top:-180px;left:6%;background:radial-gradient(circle,rgba(143,199,255,.20),transparent 70%);}
+  .glow.b{width:420px;height:420px;top:24%;right:-140px;background:radial-gradient(circle,rgba(0,217,255,.10),transparent 70%);}
+
+  /* ---------- mockup banner ---------- */
+  .mock-banner{position:relative;z-index:5;background:rgba(232,197,71,.07);
+    border-bottom:1px solid rgba(232,197,71,.28);padding:9px 20px;
+    font-family:var(--mono);font-size:11px;letter-spacing:.10em;color:var(--amber);text-align:center;}
+  .mock-banner a{border-bottom:1px solid rgba(232,197,71,.4);}
+
+  /* ---------- header (KEPT from landing) ---------- */
+  .bar{width:100%;border-bottom:1px solid var(--border);
+    background:rgba(10,10,10,.82);backdrop-filter:blur(14px);position:sticky;top:0;z-index:50;}
+  .bar-inner{max-width:1320px;margin:0 auto;padding:18px 28px 14px;display:flex;flex-direction:column;gap:13px;}
+  .bar-row{display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap;}
+  .bar-row.bottom{border-top:1px solid rgba(255,255,255,.05);padding-top:11px;}
+  .wordmark{font-weight:700;letter-spacing:.16em;font-size:19px;display:flex;align-items:center;gap:10px;}
+  .wordmark .tick{color:var(--glacier);}
+  .wordmark .sub{color:var(--muted);font-weight:400;font-size:11px;letter-spacing:.1em;}
+  .wordmark .sibyl-credit{color:var(--muted);font-weight:400;font-size:10px;letter-spacing:.08em;}
+  .status-group{display:flex;align-items:center;gap:16px;}
+  .status{display:flex;align-items:center;gap:9px;font-family:var(--mono);
+    font-size:11.5px;letter-spacing:.12em;color:var(--muted);text-transform:uppercase;}
+  .dot{width:7px;height:7px;border-radius:50%;background:var(--green);display:inline-block;}
+  .dot.live{animation:breath 2.4s ease-in-out infinite;}
+  @keyframes breath{0%,100%{opacity:.55}50%{opacity:1}}
+  .gate-link{background:none;border:1px solid rgba(192,57,43,.5);color:#d97b6f;
+    font-family:var(--mono);font-size:11px;letter-spacing:.06em;padding:6px 13px;border-radius:20px;cursor:pointer;}
+  .gate-link:hover{border-color:#C0392B;color:#ff8a7a;}
+  .nav{display:flex;gap:22px;align-items:center;font-family:var(--mono);font-size:12px;letter-spacing:.06em;}
+  .nav a{color:var(--muted);transition:color .15s;}
+  .nav a:hover{color:var(--text);}
+  .nav a.active{color:var(--glacier);}
+  .hash{font-family:var(--mono);font-size:10.5px;color:var(--muted);letter-spacing:.04em;
+    border-bottom:1px dashed rgba(255,255,255,.18);}
+
+  .wrap{max-width:1320px;margin:0 auto;padding:26px 28px 0;position:relative;z-index:2;}
+
+  /* ---------- section heading ---------- */
+  .sec-head{display:flex;align-items:flex-end;justify-content:space-between;gap:16px;
+    margin-bottom:14px;flex-wrap:wrap;}
+  .sec-head h1{font-size:23px;font-weight:700;letter-spacing:-.01em;}
+  .sec-head .sub{color:var(--muted);font-size:13px;margin-top:3px;}
+  .seg{display:flex;gap:2px;background:var(--surface2);border:1px solid var(--border);
+    border-radius:10px;padding:3px;}
+  .seg button{background:none;border:none;font-family:var(--mono);font-size:11px;letter-spacing:.06em;
+    color:var(--muted);padding:7px 14px;border-radius:7px;cursor:pointer;}
+  .seg button.on{background:var(--glacier-dim);color:var(--glacier);}
+
+  /* ---------- dual pane ---------- */
+  .bench{display:grid;grid-template-columns:344px minmax(0,1fr);gap:16px;align-items:start;}
+  .pane{background:var(--surface);border:1px solid var(--border);border-radius:16px;}
+  .pane-head{display:flex;align-items:center;justify-content:space-between;gap:10px;
+    padding:14px 16px;border-bottom:1px solid var(--border);}
+  .pane-head .t{font-family:var(--mono);font-size:10.5px;letter-spacing:.16em;color:var(--muted);text-transform:uppercase;}
+  .step-badge{display:inline-flex;align-items:center;justify-content:center;width:17px;height:17px;
+    border-radius:50%;background:var(--glacier-dim);color:var(--glacier);font-family:var(--mono);
+    font-size:10px;font-weight:700;margin-right:8px;}
+  .pane-body{padding:14px 16px 16px;}
+
+  /* subject rows */
+  .subj{display:flex;align-items:center;gap:11px;width:100%;text-align:left;
+    background:var(--surface2);border:1px solid var(--border);border-radius:11px;
+    padding:11px 13px;margin-bottom:8px;cursor:pointer;transition:border-color .16s,background .16s;}
+  .subj:hover{border-color:var(--border2);}
+  .subj.on{border-color:var(--glacier);background:var(--glacier-dim);}
+  .subj .av{width:26px;height:26px;border-radius:7px;background:var(--inset);flex:0 0 auto;
+    display:flex;align-items:center;justify-content:center;font-family:var(--mono);font-size:10px;color:var(--glacier);}
+  .subj .meta{min-width:0;flex:1;}
+  .subj .addr{font-family:var(--mono);font-size:11.5px;color:var(--text);}
+  .subj .note{font-family:var(--mono);font-size:10px;color:var(--muted);letter-spacing:.04em;}
+  .subj .score{font-family:var(--mono);font-size:13px;font-weight:700;color:var(--glacier);}
+  .subj .score.dim{color:var(--muted);font-weight:400;}
+  .tier{font-family:var(--mono);font-size:9px;letter-spacing:.1em;padding:2px 7px;border-radius:20px;}
+  .tier.plat{background:rgba(143,199,255,.14);color:#8FC7FF;}
+  .tier.gold{background:rgba(232,197,71,.14);color:var(--amber);}
+  .tier.none{background:rgba(255,255,255,.06);color:var(--muted);}
+
+  .add-wallet{width:100%;background:none;border:1px dashed var(--border2);border-radius:11px;
+    padding:10px;font-family:var(--mono);font-size:11px;color:var(--muted);cursor:pointer;margin-bottom:16px;}
+  .add-wallet:hover{border-color:var(--glacier);color:var(--glacier);}
+
+  .rail-label{font-family:var(--mono);font-size:10px;letter-spacing:.16em;color:var(--muted);
+    text-transform:uppercase;margin:0 0 9px;display:flex;align-items:center;justify-content:space-between;}
+
+  /* function accordion */
+  .fn{border:1px solid var(--border);border-radius:11px;margin-bottom:7px;overflow:hidden;
+    background:var(--surface2);transition:border-color .16s;}
+  .fn.on{border-color:var(--glacier);}
+  .fn-head{display:flex;align-items:center;gap:10px;padding:11px 12px;cursor:pointer;width:100%;
+    background:none;border:none;text-align:left;color:var(--text);}
+  .fn-head .ico{color:var(--glacier);font-size:13px;width:16px;flex:0 0 auto;}
+  .fn-head .nm{flex:1;font-size:13.5px;font-weight:500;}
+  .fn-head .price{font-family:var(--mono);font-size:11px;color:var(--muted);}
+  .fn-head .chev{color:var(--muted);font-size:10px;transition:transform .2s;}
+  .fn.on .fn-head .chev{transform:rotate(180deg);}
+  .fn-body{display:none;padding:2px 12px 13px;border-top:1px solid var(--border);}
+  .fn.on .fn-body{display:block;}
+  .fn-body .desc{color:var(--muted);font-size:12px;line-height:1.55;margin:10px 0 11px;}
+  .fn-body .pick{font-family:var(--mono);font-size:10px;color:var(--muted);letter-spacing:.1em;margin-bottom:7px;text-transform:uppercase;}
+  .fn-body .fields label{display:block;font-family:var(--mono);font-size:10px;color:var(--muted);margin-bottom:5px;letter-spacing:.06em;}
+  .fn-body .fields input{width:100%;background:var(--inset);border:1px solid var(--border);border-radius:9px;
+    color:var(--text);font-family:var(--mono);font-size:11.5px;padding:9px 11px;outline:none;}
+  .fn-body .fields input:focus{border-color:var(--glacier);}
+  .chips{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px;}
+  .chip{background:var(--surface);border:1px solid var(--border);color:var(--muted);
+    font-family:var(--mono);font-size:10px;padding:5px 10px;border-radius:20px;cursor:pointer;}
+  .chip:hover{color:var(--glacier);border-color:var(--glacier);}
+  .paths{display:flex;gap:6px;margin-top:11px;}
+  .path{flex:1;background:var(--surface);border:1px solid var(--border);border-radius:9px;
+    padding:8px 6px;font-family:var(--mono);font-size:10.5px;color:var(--muted);cursor:pointer;text-align:center;}
+  .path.on{border-color:var(--glacier);color:var(--glacier);background:var(--glacier-dim);}
+
+  /* memory control */
+  .mem-ctl{border:1px solid var(--border);border-radius:11px;background:var(--surface2);
+    padding:12px;margin-top:16px;}
+  .mem-ctl .st{display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;}
+  .mem-ctl .st .l{font-family:var(--mono);font-size:10px;letter-spacing:.12em;color:var(--muted);}
+  .mem-ctl .st .r{display:flex;align-items:center;gap:7px;font-family:var(--mono);font-size:11px;color:var(--green);}
+  .mem-btns{display:flex;gap:7px;}
+  .mem-btns button{flex:1;background:var(--surface);border:1px solid var(--border);border-radius:8px;
+    padding:8px;font-family:var(--mono);font-size:10.5px;color:var(--dim);cursor:pointer;}
+  .mem-btns button:hover{border-color:var(--border2);color:var(--text);}
+  .mem-btns button.danger{color:#d97b6f;border-color:rgba(192,57,43,.35);}
+  .mem-btns button.danger:hover{border-color:#C0392B;color:#ff8a7a;}
+  .del-test{margin-top:9px;font-family:var(--mono);font-size:10px;color:var(--muted);line-height:1.5;}
+
+  /* ---------- console ---------- */
+  .console{padding:16px;display:flex;flex-direction:column;gap:13px;}
+  .csec{border:1px solid var(--border);border-radius:13px;background:var(--inset);overflow:hidden;}
+  .csec > .h{display:flex;align-items:center;justify-content:space-between;gap:10px;
+    padding:10px 14px;border-bottom:1px solid var(--border);background:rgba(255,255,255,.012);}
+  .csec .h .l{display:flex;align-items:center;font-family:var(--mono);font-size:10px;
+    letter-spacing:.14em;color:var(--muted);text-transform:uppercase;}
+  .csec .h .r{font-family:var(--mono);font-size:10px;color:var(--muted);}
+  .csec .body{padding:14px;}
+
+  /* run row */
+  .runline{display:flex;align-items:center;gap:11px;flex-wrap:wrap;}
+  .runline .path-badge{font-family:var(--mono);font-size:10.5px;color:var(--glacier);
+    background:var(--glacier-dim);border:1px solid rgba(143,199,255,.25);padding:4px 10px;border-radius:20px;}
+  .runline .amt{margin-left:auto;font-family:var(--mono);font-size:22px;font-weight:700;color:var(--glacier);}
+  .runline .amt small{font-size:11px;color:var(--muted);font-weight:400;margin-left:5px;}
+  .btn{background:var(--glacier-dim);border:1px solid rgba(143,199,255,.4);color:var(--glacier);
+    font-family:var(--mono);font-size:11.5px;padding:9px 17px;border-radius:9px;cursor:pointer;transition:all .16s;}
+  .btn:hover{background:rgba(143,199,255,.16);}
+  .btn.ghost{background:none;border-color:var(--border2);color:var(--dim);}
+  .btn.ghost:hover{border-color:var(--glacier);color:var(--glacier);}
+  .btn.go{background:rgba(39,174,96,.14);border-color:rgba(39,174,96,.45);color:#8fd9ac;}
+  .btn.go:hover{background:rgba(39,174,96,.22);}
+
+  /* terminal */
+  .term{background:#0b0d10;border:1px solid var(--border);border-radius:11px;overflow:hidden;}
+  .term .th{display:flex;align-items:center;gap:8px;padding:8px 12px;border-bottom:1px solid var(--border);
+    background:#0e1114;font-family:var(--mono);font-size:9.5px;letter-spacing:.1em;color:var(--muted);text-transform:uppercase;}
+  .dots3{display:flex;gap:5px;}
+  .dots3 i{width:8px;height:8px;border-radius:50%;display:block;}
+  .dots3 i:nth-child(1){background:#d97b6f;} .dots3 i:nth-child(2){background:#e5c07b;} .dots3 i:nth-child(3){background:#8fd9ac;}
+  .term .cp{margin-left:auto;background:var(--surface2);border:1px solid var(--border);color:var(--muted);
+    font-family:var(--mono);font-size:9px;padding:3px 9px;border-radius:6px;cursor:pointer;text-transform:none;letter-spacing:.04em;}
+  .term .cp:hover{color:var(--glacier);border-color:var(--glacier);}
+  .term code{display:block;padding:13px 15px;font-family:var(--mono);font-size:11.5px;
+    color:#cfd8e3;white-space:pre-wrap;word-break:break-word;line-height:1.65;}
+  .term .p{color:var(--green);font-weight:700;}
+  .term .cm{color:var(--muted);}
+
+  .tabs{display:flex;gap:6px;margin-bottom:11px;}
+  .tab{background:var(--surface2);border:1px solid var(--border);border-radius:20px;
+    font-family:var(--mono);font-size:10.5px;color:var(--muted);padding:6px 13px;cursor:pointer;}
+  .tab.on{background:var(--glacier-dim);border-color:var(--glacier);color:var(--glacier);}
+  .tab:hover{color:var(--text);}
+
+  /* quote */
+  .qgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(126px,1fr));gap:10px;}
+  .qcell{background:var(--surface2);border:1px solid var(--border);border-radius:10px;padding:11px 12px;}
+  .qcell .k{font-family:var(--mono);font-size:9.5px;letter-spacing:.11em;color:var(--muted);text-transform:uppercase;margin-bottom:5px;}
+  .qcell .v{font-family:var(--mono);font-size:13px;color:var(--text);}
+  .qcell .v.gl{color:var(--glacier);} .qcell .v.gr{color:#8fd9ac;} .qcell .v.am{color:var(--amber);}
+  .qcell .v a{border-bottom:1px solid rgba(143,199,255,.35);}
+
+  /* memory trace */
+  .trace{display:flex;flex-direction:column;gap:0;}
+  .tr{display:flex;align-items:flex-start;gap:11px;padding:10px 0;position:relative;}
+  .tr:not(:last-child)::before{content:"";position:absolute;left:8px;top:28px;bottom:-2px;width:1px;
+    background:linear-gradient(var(--border2),transparent);}
+  .tr .n{width:17px;height:17px;border-radius:50%;flex:0 0 auto;display:flex;align-items:center;
+    justify-content:center;font-family:var(--mono);font-size:9px;background:var(--glacier-dim);color:var(--glacier);}
+  .tr.mem .n{background:rgba(232,197,71,.16);color:var(--amber);}
+  .tr.done .n{background:var(--green-dim);color:#8fd9ac;}
+  .tr .tx{flex:1;min-width:0;}
+  .tr .tt{font-family:var(--mono);font-size:11.5px;color:var(--text);}
+  .tr .td{font-family:var(--mono);font-size:10.5px;color:var(--muted);margin-top:3px;line-height:1.5;}
+  .tr .tag{font-family:var(--mono);font-size:9px;letter-spacing:.1em;padding:2px 7px;border-radius:20px;
+    background:rgba(232,197,71,.14);color:var(--amber);}
+  .tr .tag.ok{background:var(--green-dim);color:#8fd9ac;}
+
+  /* derivation bars */
+  .deriv{display:flex;flex-direction:column;gap:9px;}
+  .dr .top{display:flex;justify-content:space-between;font-family:var(--mono);font-size:10.5px;margin-bottom:5px;}
+  .dr .top .k{color:var(--muted);} .dr .top .v{color:var(--text);}
+  .dr .track{height:5px;border-radius:3px;background:rgba(255,255,255,.06);overflow:hidden;}
+  .dr .fill{height:100%;border-radius:3px;background:linear-gradient(90deg,var(--glacier-deep),var(--glacier));}
+  .dr .fill.am{background:linear-gradient(90deg,#a8871f,var(--amber));}
+
+  /* diff (memory on/off) */
+  .diff{display:grid;grid-template-columns:1fr 1fr;gap:10px;}
+  .dcol{border:1px solid var(--border);border-radius:11px;padding:12px;background:var(--surface2);}
+  .dcol.off{border-color:rgba(192,57,43,.30);}
+  .dcol .hd{font-family:var(--mono);font-size:9.5px;letter-spacing:.12em;text-transform:uppercase;margin-bottom:9px;}
+  .dcol.on .hd{color:var(--green);} .dcol.off .hd{color:#d97b6f;}
+  .dcol .row{display:flex;justify-content:space-between;font-family:var(--mono);font-size:11px;padding:5px 0;
+    border-bottom:1px solid rgba(255,255,255,.04);}
+  .dcol .row:last-child{border:none;}
+  .dcol .row .k{color:var(--muted);} .dcol .row .v{color:var(--text);}
+  .dcol.off .row .v{color:#e0a49c;}
+
+  /* next step */
+  .next{border:1px solid rgba(143,199,255,.24);border-radius:13px;padding:14px;
+    background:linear-gradient(180deg,rgba(143,199,255,.05),transparent);}
+  .next .lb{font-family:var(--mono);font-size:10px;letter-spacing:.14em;color:var(--muted);
+    text-transform:uppercase;margin-bottom:11px;}
+  .next .btns{display:flex;gap:8px;flex-wrap:wrap;}
+  .next .nb{background:var(--surface2);border:1px solid var(--border);border-radius:9px;
+    padding:9px 13px;font-family:var(--mono);font-size:11px;color:var(--dim);cursor:pointer;transition:all .16s;}
+  .next .nb:hover{border-color:var(--glacier);color:var(--glacier);}
+  .next .nb.rec{border-color:rgba(143,199,255,.5);color:var(--glacier);background:var(--glacier-dim);}
+
+  /* ---------- dock ---------- */
+  .dock{margin-top:18px;}
+  .dock-bar{display:flex;align-items:center;gap:11px;width:100%;background:var(--surface);
+    border:1px solid var(--border);border-radius:12px;padding:12px 15px;cursor:pointer;margin-bottom:7px;
+    text-align:left;color:var(--text);transition:border-color .16s;}
+  .dock-bar:hover{border-color:var(--border2);}
+  .dock-bar .chev{color:var(--muted);font-size:10px;transition:transform .2s;}
+  .dock-bar.on .chev{transform:rotate(180deg);}
+  .dock-bar .nm{flex:1;font-size:13.5px;font-weight:500;}
+  .dock-bar .ct{font-family:var(--mono);font-size:10px;color:var(--muted);}
+  .dock-body{display:none;border:1px solid var(--border);border-radius:12px;background:var(--surface);
+    padding:14px;margin-bottom:7px;}
+  .dock-bar.on + .dock-body{display:block;}
+  table{width:100%;border-collapse:collapse;}
+  th{font-family:var(--mono);font-size:9.5px;letter-spacing:.11em;color:var(--muted);text-transform:uppercase;
+    text-align:left;padding:0 0 9px;border-bottom:1px solid var(--border);}
+  td{font-family:var(--mono);font-size:11.5px;color:var(--dim);padding:10px 0;border-bottom:1px solid rgba(255,255,255,.04);}
+  tr:last-child td{border:none;}
+  td a{color:var(--glacier);border-bottom:1px solid rgba(143,199,255,.3);}
+
+  /* ---------- mobile dual-pane ---------- */
+  .mob-toggle{display:none;position:sticky;top:112px;z-index:40;margin:0 0 12px;
+    background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:5px;}
+  .mob-toggle .seg{background:none;border:none;padding:0;width:100%;}
+  .mob-toggle .seg button{flex:1;padding:11px;}
+  .mob-toggle .seg button .n{display:inline-flex;width:15px;height:15px;border-radius:50%;
+    background:rgba(255,255,255,.08);color:var(--muted);font-size:9px;align-items:center;justify-content:center;margin-right:6px;}
+  .mob-toggle .seg button.on .n{background:rgba(143,199,255,.22);color:var(--glacier);}
+  .done-hint{display:none;font-family:var(--mono);font-size:10px;color:var(--glacier);
+    margin:-4px 0 10px;letter-spacing:.04em;}
+
+  @media(max-width:900px){
+    .wrap{padding:18px 16px 0;}
+    .bar-inner{padding:15px 16px 12px;}
+    .bench{grid-template-columns:1fr;gap:0;}
+    .mob-toggle{display:block;}
+    .pane.mobile-hidden{display:none;}
+    .console{padding:14px;}
+    .diff{grid-template-columns:1fr;}
+    .seg{width:100%;}
+    .hash{font-size:9.5px;}
+    /* journals: stack the row instead of squeezing 5 columns */
+    .dock-body table, .dock-body tbody, .dock-body tr, .dock-body td{display:block;width:100%;}
+    .dock-body thead, .dock-body th{display:none;}
+    .dock-body tr{border:1px solid var(--border);border-radius:10px;padding:10px 12px;margin-bottom:8px;}
+    .dock-body td{border:none;padding:3px 0;font-size:11px;}
+    .dock-body td:first-child{color:var(--glacier);}
+    .dock-body td:last-child{border:none;}
+    .dock-scroll{overflow-x:auto;}
+  }
+</style>
+</head>
+<body>
+<div class="ambient" aria-hidden="true"><div class="grid-bg"></div><div class="glow a"></div><div class="glow b"></div></div>
+
+<div class="mock-banner">MOCKUP — LAYOUT PROPOSAL, NOT LIVE · dual-pane workbench · <a href="#" onclick="return false">approve / reject in chat</a></div>
+
+<!-- HEADER: kept from landing, gallery link renamed -->
+<header class="bar">
+  <div class="bar-inner">
+    <div class="bar-row top">
+      <div class="wordmark">THE<span class="tick">·</span>HOUSE <span class="sub">memory-native x402</span><span class="sibyl-credit"> · by Sibyl Labs</span></div>
+      <div class="status-group">
+        <div class="status"><span class="dot live"></span>MEMORY LIVE</div>
+        <button class="gate-link">disable memory</button>
+      </div>
+    </div>
+    <div class="bar-row bottom">
+      <div class="nav">
+        <a href="#" class="active" onclick="return false">try it live</a>
+        <a href="#" onclick="return false">ledger</a>
+        <a href="#" onclick="return false">manifest</a>
+      </div>
+      <div class="hash">commit d4b9acc</div>
+    </div>
+  </div>
+</header>
+
+<div class="wrap">
+
+  <div class="sec-head">
+    <div>
+      <h1>gallery</h1>
+      <div class="sub">Pick a counterparty, run a function, watch memory decide — then it hands you the next step.</div>
+    </div>
+    <div class="seg">
+      <button class="on">workbench</button>
+      <button>journals</button>
+    </div>
+  </div>
+
+  <!-- mobile pane switch -->
+  <div class="mob-toggle">
+    <div class="seg">
+      <button class="on" onclick="mobPane('left')"><span class="n">1</span>configure</button>
+      <button onclick="mobPane('right')"><span class="n">2</span>console</button>
+    </div>
+  </div>
+  <div class="done-hint" id="done-hint">① configure is done — showing the console ↓</div>
+
+  <div class="bench">
+
+    <!-- ============ LEFT PANE ============ -->
+    <div class="pane" id="pane-left">
+      <div class="pane-head"><span class="t">configure</span><span class="t" style="color:var(--glacier)">1 → 2 → 3</span></div>
+      <div class="pane-body">
+
+        <div class="rail-label"><span><span class="step-badge">1</span>subject</span></div>
+        <button class="subj on">
+          <span class="av">890</span>
+          <span class="meta"><span class="addr">0x890fae…9d2a10</span><br><span class="note">1 serve · 1 session</span></span>
+          <span class="score">53</span>
+        </button>
+        <button class="subj">
+          <span class="av">436</span>
+          <span class="meta"><span class="addr">0x436f32…51cec1</span><br><span class="note">provider · 1 job done</span></span>
+          <span class="tier plat">PROVEN</span>
+        </button>
+        <button class="subj">
+          <span class="av">d313</span>
+          <span class="meta"><span class="addr">0xd31364…31c69e</span><br><span class="note">buyer · 0.01 settled</span></span>
+          <span class="score dim">—</span>
+        </button>
+        <button class="add-wallet">＋ watch / connect a wallet</button>
+
+        <div class="rail-label"><span><span class="step-badge">2</span>function</span><span style="color:var(--glacier)">7</span></div>
+
+        <div class="fn on">
+          <button class="fn-head"><span class="ico">◉</span><span class="nm">Ask the house</span><span class="price">$0.01</span><span class="chev">▾</span></button>
+          <div class="fn-body">
+            <div class="desc">Ask anything it remembers. A repeat from the same wallet is served from memory at net $0.</div>
+            <div class="fields">
+              <label>your question</label>
+              <input value="what does the house remember about 0x890fae…9d2a10?">
+            </div>
+            <div class="chips">
+              <span class="chip">trust of 0x436f32…</span>
+              <span class="chip">who paid, how much</span>
+            </div>
+            <div class="paths">
+              <span class="path">manual</span>
+              <span class="path on">agent</span>
+              <span class="path">wallet</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="fn">
+          <button class="fn-head"><span class="ico">⬡</span><span class="nm">Underwrite a provider</span><span class="price">$0.02</span><span class="chev">▾</span></button>
+          <div class="fn-body"><div class="desc">The house bonds a provider with its own money. Premium is priced from remembered quality; a scarred provider is refused.</div></div>
+        </div>
+        <div class="fn">
+          <button class="fn-head"><span class="ico">◈</span><span class="nm">Screen a wallet</span><span class="price">$0.01</span><span class="chev">▾</span></button>
+          <div class="fn-body"><div class="desc">Deterministic risk screen — CLEAR, HOLD or ABORT, with the exact rule that fired.</div></div>
+        </div>
+        <div class="fn">
+          <button class="fn-head"><span class="ico">▤</span><span class="nm">Provider report</span><span class="price">$0.01</span><span class="chev">▾</span></button>
+          <div class="fn-body"><div class="desc">The full record on a provider: jobs, quality, on-time, defaults, claims.</div></div>
+        </div>
+        <div class="fn">
+          <button class="fn-head"><span class="ico">⬢</span><span class="nm">Hire decision</span><span class="price">$0.01</span><span class="chev">▾</span></button>
+          <div class="fn-body"><div class="desc">A hiring ruling. Proven gets preferred terms, risky is refused — and never charged for the refusal.</div></div>
+        </div>
+        <div class="fn">
+          <button class="fn-head"><span class="ico">⌘</span><span class="nm">Entity dossier</span><span class="price">$0.01</span><span class="chev">▾</span></button>
+          <div class="fn-body"><div class="desc">Every remembered fact about one wallet, across all rooms, timestamped.</div></div>
+        </div>
+        <div class="fn">
+          <button class="fn-head"><span class="ico">◍</span><span class="nm">Fund prepay credit</span><span class="price">$0.05</span><span class="chev">▾</span></button>
+          <div class="fn-body"><div class="desc">Fund your wallet's prepay credit — how a risky wallet proves it can pay.</div></div>
+        </div>
+
+        <div class="rail-label" style="margin-top:16px"><span><span class="step-badge">3</span>memory</span></div>
+        <div class="mem-ctl">
+          <div class="st"><span class="l">SIBYL MEMORY</span><span class="r"><span class="dot live"></span>live</span></div>
+          <div class="mem-btns">
+            <button>disable</button>
+            <button class="danger">purge</button>
+          </div>
+          <div class="del-test">Disable is reversible (15 min). Purge is permanent. Either way the console below recomputes — that is the deletion test, run live.</div>
+        </div>
+
+      </div>
+    </div>
+
+    <!-- ============ RIGHT PANE ============ -->
+    <div class="pane mobile-hidden" id="pane-right">
+      <div class="pane-head">
+        <span class="t">console · ask the house</span>
+        <span class="t" style="color:var(--muted)">live</span>
+      </div>
+      <div class="console">
+
+        <!-- 1 · RUN -->
+        <div class="csec">
+          <div class="h"><span class="l"><span class="step-badge">1</span>run</span><span class="r">subject 0x890fae…9d2a10</span></div>
+          <div class="body">
+            <div class="tabs">
+              <span class="tab">manual</span>
+              <span class="tab on">agent</span>
+              <span class="tab">connect wallet instead?</span>
+            </div>
+            <div class="runline">
+              <span class="path-badge">GET /intel/quote</span>
+              <span class="amt">0.01 <small>USDC</small></span>
+            </div>
+            <div class="term" style="margin-top:12px">
+              <div class="th"><span class="dots3"><i></i><i></i><i></i></span>your terminal<span class="cp">copy</span></div>
+              <code><span class="p">$</span> curl -sS -X GET 'https://the-house.example/intel/quote?q=what+does+the+house+remember'
+<span class="cm"># 402 → payment-required header carries the quote</span></code>
+            </div>
+            <div style="display:flex;gap:8px;margin-top:11px;flex-wrap:wrap">
+              <button class="btn">refresh quote</button>
+              <button class="btn ghost">copy agent prompt</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- 2 · QUOTE -->
+        <div class="csec">
+          <div class="h"><span class="l"><span class="step-badge">2</span>quote</span><span class="r"><span class="dot live"></span>live</span></div>
+          <div class="body">
+            <div class="qgrid">
+              <div class="qcell"><div class="k">amount</div><div class="v gl">0.01 USDC</div></div>
+              <div class="qcell"><div class="k">network</div><div class="v">base · 8453</div></div>
+              <div class="qcell"><div class="k">pay to</div><div class="v"><a href="#" onclick="return false">0x9fd05b…ee6753</a></div></div>
+              <div class="qcell"><div class="k">trust used</div><div class="v am">53 → +3</div></div>
+            </div>
+            <div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap">
+              <button class="btn go">settle →</button>
+              <button class="btn ghost">copy payment request</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- 3 · MEMORY TRACE -->
+        <div class="csec">
+          <div class="h"><span class="l"><span class="step-badge">3</span>memory trace</span><span class="r">read before price · write after serve</span></div>
+          <div class="body">
+            <div class="trace">
+              <div class="tr mem"><span class="n">R</span><span class="tx"><span class="tt">recall 0x890fae…9d2a10</span><br><span class="td">Sibyl Memory · 1 row found</span></span><span class="tag">memory</span></div>
+              <div class="tr"><span class="n">1</span><span class="tx"><span class="tt">read memory → what it knows</span><br><span class="td">trust 53 · 1 serve · no scars</span></span></div>
+              <div class="tr"><span class="n">2</span><span class="tx"><span class="tt">price from that row</span><br><span class="td">base 0.01 · trust tier → 0.01 (no change)</span></span></div>
+              <div class="tr"><span class="n">3</span><span class="tx"><span class="tt">serve</span><br><span class="td">answer returned</span></span></div>
+              <div class="tr mem done"><span class="n">W</span><span class="tx"><span class="tt">write memory ← what it learned</span><br><span class="td">serves 1→2 · trust 53→56</span></span><span class="tag ok">written</span></div>
+            </div>
+            <div style="margin-top:13px;padding-top:13px;border-top:1px solid var(--border)">
+              <div class="rail-label">how the number is derived</div>
+              <div class="deriv">
+                <div class="dr"><div class="top"><span class="k">base</span><span class="v">50 / 50</span></div><div class="track"><div class="fill" style="width:100%"></div></div></div>
+                <div class="dr"><div class="top"><span class="k">serves · +3 each</span><span class="v">3 / 30</span></div><div class="track"><div class="fill" style="width:10%"></div></div></div>
+                <div class="dr"><div class="top"><span class="k">segment · new wallet</span><span class="v">+0 / 20</span></div><div class="track"><div class="fill am" style="width:0%"></div></div></div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 4 · ARTIFACT -->
+        <div class="csec">
+          <div class="h"><span class="l"><span class="step-badge">4</span>artifact · onchain</span><span class="r">Basescan-decodable</span></div>
+          <div class="body">
+            <div class="qgrid">
+              <div class="qcell"><div class="k">tx</div><div class="v"><a href="#" onclick="return false">0xd31364dc…31c69e</a></div></div>
+              <div class="qcell"><div class="k">settled</div><div class="v gr">0.01 USDC</div></div>
+              <div class="qcell"><div class="k">buyer</div><div class="v">0xd31364…31c69e</div></div>
+              <div class="qcell"><div class="k">memory delta</div><div class="v am">trust 50→53</div></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 5 · MEMORY ON/OFF DIFF -->
+        <div class="csec">
+          <div class="h"><span class="l">what memory is worth</span><span class="r">same request, both ways</span></div>
+          <div class="body">
+            <div class="diff">
+              <div class="dcol on">
+                <div class="hd">● memory on</div>
+                <div class="row"><span class="k">price</span><span class="v">0.01</span></div>
+                <div class="row"><span class="k">dedup</span><span class="v">repeat → $0</span></div>
+                <div class="row"><span class="k">refusal</span><span class="v">scars respected</span></div>
+                <div class="row"><span class="k">trust</span><span class="v">53 → 56</span></div>
+              </div>
+              <div class="dcol off">
+                <div class="hd">○ memory off</div>
+                <div class="row"><span class="k">price</span><span class="v">0.01 list</span></div>
+                <div class="row"><span class="k">dedup</span><span class="v">none — pay again</span></div>
+                <div class="row"><span class="k">refusal</span><span class="v">cannot refuse</span></div>
+                <div class="row"><span class="k">trust</span><span class="v">—</span></div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 6 · NEXT STEP -->
+        <div class="next">
+          <div class="lb">next logical step</div>
+          <div class="btns">
+            <button class="nb rec">◈ screen this wallet →</button>
+            <button class="nb">⌘ open its dossier</button>
+            <button class="nb">⬢ hire decision · 0x436f32…</button>
+          </div>
+        </div>
+
+      </div>
+    </div>
+  </div>
+
+  <!-- ============ DOCK ============ -->
+  <div class="dock">
+    <div class="sec-head" style="margin:20px 0 12px">
+      <div><h1 style="font-size:17px">journals</h1>
+      <div class="sub">The house's own records. They update as you work above.</div></div>
+    </div>
+
+    <button class="dock-bar on"><span class="nm">every settlement, with its transaction</span><span class="ct">1 row</span><span class="chev">▾</span></button>
+    <div class="dock-body">
+      <table>
+        <tr><th>tx</th><th>what</th><th>usdc</th><th>memory delta</th></tr>
+        <tr><td><a href="#" onclick="return false">0xd31364dc…31c69e</a></td><td>settlement · buyer → house wallet</td><td>0.01</td><td>caller 890fae · trust 50→53</td></tr>
+      </table>
+    </div>
+
+    <button class="dock-bar"><span class="nm">the ledger of who it knows</span><span class="ct">1 wallet</span><span class="chev">▾</span></button>
+    <div class="dock-body">
+      <table>
+        <tr><th>wallet</th><th>trust</th><th>serves</th><th>last seen</th></tr>
+        <tr><td>0x890fae…9d2a10</td><td>53</td><td>1</td><td>2026-09-08 05:42 UTC</td></tr>
+      </table>
+    </div>
+
+    <button class="dock-bar"><span class="nm">the asset rail · Virtuals ACP</span><span class="ct">3 jobs · ×1.25</span><span class="chev">▾</span></button>
+    <div class="dock-body">
+      <table>
+        <tr><th>job</th><th>provider</th><th>offering</th><th>escrow</th><th>status</th></tr>
+        <tr><td>77330</td><td>BitsAndBytesBack</td><td>prompt_optimization</td><td>0.02</td><td style="color:#8fd9ac">completed</td></tr>
+        <tr><td>77332</td><td>aiworker-data</td><td>page_markdown</td><td>—</td><td style="color:#e0a49c">session expired</td></tr>
+        <tr><td>77338</td><td>—</td><td>agentRiskCheck</td><td>—</td><td style="color:#e0a49c">session expired</td></tr>
+      </table>
+      <div style="font-family:var(--mono);font-size:10px;color:var(--muted);margin-top:11px">
+        escrow tx 77330 · <a href="#" onclick="return false" style="color:var(--glacier)">0x939a1fc8…92a277</a> ↗ basescan
+      </div>
+    </div>
+
+    <button class="dock-bar"><span class="nm">the bond book</span><span class="ct">0 bonds</span><span class="chev">▾</span></button>
+    <div class="dock-body"><div style="font-family:var(--mono);font-size:11px;color:var(--muted)">no bonds issued yet — underwrite a provider above to open the book.</div></div>
+
+    <button class="dock-bar"><span class="nm">the draft board</span><span class="ct">0 providers</span><span class="chev">▾</span></button>
+    <div class="dock-body"><div style="font-family:var(--mono);font-size:11px;color:var(--muted)">no providers drafted yet — run a provider report above.</div></div>
+
+    <button class="dock-bar"><span class="nm">the verdict feed</span><span class="ct">0 screens</span><span class="chev">▾</span></button>
+    <div class="dock-body"><div style="font-family:var(--mono);font-size:11px;color:var(--muted)">no screens run yet — screen a wallet above.</div></div>
+
+    <button class="dock-bar"><span class="nm">the season log</span><span class="ct">live</span><span class="chev">▾</span></button>
+    <div class="dock-body"><div style="font-family:var(--mono);font-size:11px;color:var(--muted)">every serve, bond, screen and delegation, timestamped.</div></div>
+  </div>
+
+</div>
+
+<script>
+  // pane switch (mobile) — mirrors the desktop dual-pane on a narrow screen
+  function mobPane(which){
+    var l=document.getElementById('pane-left'), r=document.getElementById('pane-right');
+    var btns=document.querySelectorAll('.mob-toggle .seg button');
+    var hint=document.getElementById('done-hint');
+    if(which==='left'){ l.classList.remove('mobile-hidden'); r.classList.add('mobile-hidden');
+      btns[0].classList.add('on'); btns[1].classList.remove('on'); hint.style.display='none'; }
+    else { r.classList.remove('mobile-hidden'); l.classList.add('mobile-hidden');
+      btns[1].classList.add('on'); btns[0].classList.remove('on');
+      hint.textContent='① configure is set — you are on the console. Tap ① to change the subject or function.';
+      hint.style.display='block'; }
+    window.scrollTo({top:0,behavior:'smooth'});
+  }
+  // the "run" step advances to the console (the auto-advance in miniature)
+  document.querySelectorAll('#pane-right .btn, .next .nb').forEach(function(b){
+    b.addEventListener('click', function(){
+      if(window.innerWidth<=900){ mobPane('right'); }
+    });
+  });
+  // function accordion (single-open)
+  document.querySelectorAll('.fn-head').forEach(function(h){
+    h.addEventListener('click', function(){
+      var fn=h.parentElement, wasOn=fn.classList.contains('on');
+      document.querySelectorAll('.fn').forEach(function(f){f.classList.remove('on');});
+      if(!wasOn) fn.classList.add('on');
+    });
+  });
+  // subject select
+  document.querySelectorAll('.subj').forEach(function(s){
+    s.addEventListener('click', function(){
+      document.querySelectorAll('.subj').forEach(function(x){x.classList.remove('on');});
+      s.classList.add('on');
+    });
+  });
+  // dock toggle
+  document.querySelectorAll('.dock-bar').forEach(function(b){
+    b.addEventListener('click', function(){ b.classList.toggle('on'); });
+  });
+  // path / tab select
+  document.querySelectorAll('.path, .tab').forEach(function(t){
+    t.addEventListener('click', function(){
+      var sib=t.parentElement.querySelectorAll('.path, .tab');
+      sib.forEach(function(x){x.classList.remove('on');});
+      t.classList.add('on');
+    });
+  });
+</script>
+</body>
+</html>

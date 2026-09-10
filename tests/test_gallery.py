@@ -246,7 +246,12 @@ def test_gallery_renders_and_journal_free(tmp_path, monkeypatch):
     app = build_app()
     client = TestClient(app)
     r = client.get("/gallery")
-    assert r.status_code == 200 and "watchable" in r.text.lower()
+    # the gallery is now the workbench: dual-pane configure/console + journals dock
+    assert r.status_code == 200
+    low = r.text.lower()
+    assert "configure" in low and "console" in low
+    assert "the house has not remembered anyone yet" in low
+    assert "next logical step" in low
     r2 = client.get("/house/journal")
     assert r2.status_code == 200
     assert r2.json()["memory"] in ("live", "disabled")
