@@ -192,8 +192,13 @@ _GALLERY_HTML = r"""<!doctype html>
   .fn-head .ico{color:var(--glacier);font-size:13px;width:16px;flex:0 0 auto;}
   .fn-head .nm{flex:1;font-size:13.5px;font-weight:500;}
   .fn-head .price{font-family:var(--mono);font-size:11px;color:var(--muted);}
-  .fn-head .chev{color:var(--muted);font-size:10px;transition:transform .2s;}
-  .fn.on .fn-head .chev{transform:rotate(180deg);}
+  .fn-head .chev{display:inline-flex;width:22px;height:22px;border-radius:50%;
+    border:1px solid var(--border2);color:var(--muted);font-size:9px;
+    align-items:center;justify-content:center;flex:0 0 auto;transition:all .2s ease;}
+  .fn:hover .fn-head .chev{border-color:rgba(143,199,255,.45);color:var(--glacier);
+    box-shadow:0 0 10px rgba(143,199,255,.2);}
+  .fn.on .fn-head .chev{transform:rotate(180deg);background:rgba(143,199,255,.14);
+    border-color:rgba(143,199,255,.5);color:var(--glacier);}
   .fn-body{display:none;padding:2px 12px 13px;border-top:1px solid var(--border);}
   .fn.on .fn-body{display:block;}
   .fn-body .desc{color:var(--muted);font-size:12px;line-height:1.55;margin:10px 0 11px;}
@@ -399,8 +404,13 @@ _GALLERY_HTML = r"""<!doctype html>
     border:1px solid var(--border);border-radius:12px;padding:12px 15px;cursor:pointer;margin-bottom:7px;
     text-align:left;color:var(--text);transition:border-color .16s;}
   .dock-bar:hover{border-color:var(--border2);}
-  .dock-bar .chev{color:var(--muted);font-size:10px;transition:transform .2s;}
-  .dock-bar.on .chev{transform:rotate(180deg);}
+  .dock-bar .chev{display:inline-flex;width:22px;height:22px;border-radius:50%;
+    border:1px solid var(--border2);color:var(--muted);font-size:9px;
+    align-items:center;justify-content:center;flex:0 0 auto;transition:all .2s ease;}
+  .dock-bar:hover .chev{border-color:rgba(143,199,255,.45);color:var(--glacier);
+    box-shadow:0 0 10px rgba(143,199,255,.2);}
+  .dock-bar.on .chev{transform:rotate(180deg);background:rgba(143,199,255,.14);
+    border-color:rgba(143,199,255,.5);color:var(--glacier);}
   .dock-bar .nm{flex:1;font-size:13.5px;font-weight:500;}
   .dock-bar .ct{font-family:var(--mono);font-size:10px;color:var(--muted);}
   .dock-body{display:none;border:1px solid var(--border);border-radius:12px;background:var(--surface);

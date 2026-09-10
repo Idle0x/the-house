@@ -11,6 +11,9 @@
 #   CDP_API_KEY_ID, CDP_API_KEY_SECRET, HOUSE_WALLET, HOUSE_NETWORK,
 #   HOUSE_USDC_BASE, HOUSE_AGENT_ID, HOUSE_AGENT_NAME
 #   (receive-side only. Leave HOUSE_LIVE_MONEY_OUT unset = OFF -> never sends.)
+# Build identity (so the pages show the real commit + repo link):
+#   HOUSE_COMMIT (short SHA, e.g. 70df6f0), HOUSE_REPO_URL (forks only —
+#   defaults to https://github.com/Idle0x/the-house).
 #   Optional ACP (only if you want ACP on the public deploy):
 #   ACP_OWNER_WALLET, ACP_ACCESS_TOKEN, ACP_REFRESH_TOKEN, ACP_WALLET_RPC_URL
 

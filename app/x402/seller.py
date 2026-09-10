@@ -289,7 +289,14 @@ async def lifespan(app: FastAPI):
 
 def _git_commit() -> str:
     """Short git SHA of the running checkout ("" outside a repo / on failure).
-    Surfaced on the landing page as the build identity."""
+    Surfaced on the landing page as the build identity.
+
+    Env ``HOUSE_COMMIT`` wins: production images exclude ``.git`` (see
+    .dockerignore), so the deploy platform injects the SHA at build time
+    (Dockerfile ``ARG GIT_SHA``) or via dashboard variables."""
+    env = os.getenv("HOUSE_COMMIT", "").strip()
+    if env:
+        return env
     import subprocess
     try:
         out = subprocess.run(
@@ -302,10 +309,23 @@ def _git_commit() -> str:
         return ""
 
 
+# Fallback build identity when neither env nor git can provide one (a
+# container built from this repo with .git excluded). This is the public
+# submission repo — forks should set HOUSE_REPO_URL instead.
+DEFAULT_REPO_URL = "https://github.com/Idle0x/the-house"
+
+
 def _repo_url() -> str:
-    """Public repo URL for the landing page. Reads the origin remote when
-    present; returns "" (page shows an honest 'private build page' line) when
-    there is no remote yet (Gate 5 push not done)."""
+    """Public repo URL for the landing page.
+
+    Precedence: explicit ``HOUSE_REPO_URL`` env (deploy dashboards) → git
+    origin remote → DEFAULT_REPO_URL. Returns the default (never "") so a
+    production build without git metadata still links the public repo
+    instead of rendering the 'private build page' fallback line. (An empty
+    string previously meant 'no remote yet'; the repo is public now.)"""
+    env = os.getenv("HOUSE_REPO_URL", "").strip().rstrip("/")
+    if env:
+        return env
     import subprocess
     try:
         out = subprocess.run(
@@ -315,14 +335,14 @@ def _repo_url() -> str:
         )
         url = out.stdout.strip()
         if not url:
-            return ""
+            return DEFAULT_REPO_URL
         # normalize git@github.com:user/repo.git -> https://github.com/user/repo
         if url.startswith("git@") and ":" in url:
             hostpath = url.split("@", 1)[1]
             url = "https://" + hostpath.replace(":", "/", 1)
         return url.rstrip("/").removesuffix(".git")
     except Exception:  # noqa: BLE001
-        return ""
+        return DEFAULT_REPO_URL
 
 
 def _client_ip(request: Request) -> str:

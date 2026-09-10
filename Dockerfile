@@ -40,9 +40,16 @@ COPY app ./app
 COPY scripts ./scripts
 
 # 4) State + runtime env
+# Build identity: .dockerignore excludes .git, so without these the pages
+# render blank commit / "private build page" fallbacks. Inject at build time:
+#   docker build --build-arg GIT_SHA=$(git rev-parse --short HEAD) .
+# or set HOUSE_COMMIT (+ HOUSE_REPO_URL for forks) as dashboard variables
+# (Railway/Render) — explicit env always wins over the build arg.
+ARG GIT_SHA=""
 ENV HOUSE_MEMORY_DB=/data/memory.db \
     HOUSE_PORT=8000 \
     PORT=8000 \
+    HOUSE_COMMIT=${GIT_SHA} \
     PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1
 

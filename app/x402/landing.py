@@ -224,8 +224,17 @@ _LANDING_HTML = r"""<!doctype html>
     animation:breath 3s ease-in-out infinite;}
   .dot.off{background:var(--red);animation:none;box-shadow:0 0 0 0 transparent;}
   .hash{font-family:var(--mono);font-size:10px;color:var(--muted);letter-spacing:.03em;opacity:.85;}
-  .nav{display:flex;gap:20px;font-family:var(--mono);font-size:12px;color:var(--muted);}
+  .nav{display:flex;gap:20px;font-family:var(--mono);font-size:12px;color:var(--muted);align-items:center;}
   .nav a:hover{color:var(--glacier);}
+  /* header CTA — subtle blue glow so the entry point is never overlooked */
+  .nav a.try-live{color:var(--glacier);border:1px solid rgba(143,199,255,.5);
+    padding:6px 14px;border-radius:20px;background:rgba(143,199,255,.07);
+    box-shadow:0 0 14px rgba(143,199,255,.28),inset 0 0 8px rgba(143,199,255,.08);
+    animation:tryGlow 2.8s ease-in-out infinite;transition:all .18s ease;white-space:nowrap;}
+  .nav a.try-live:hover{color:#d6e9ff;border-color:var(--glacier);background:rgba(143,199,255,.13);
+    box-shadow:0 0 22px rgba(143,199,255,.45),inset 0 0 10px rgba(143,199,255,.12);}
+  @keyframes tryGlow{0%,100%{box-shadow:0 0 10px rgba(143,199,255,.22),inset 0 0 8px rgba(143,199,255,.06);}
+    50%{box-shadow:0 0 18px rgba(143,199,255,.4),inset 0 0 8px rgba(143,199,255,.1);}}
   .nav a.gate-link{color:#ff8a7a;border:1px solid rgba(192,57,43,.5);padding:5px 12px;border-radius:20px;transition:all .18s ease;}
   .nav a.gate-link:hover{color:#ffb3a8;border-color:var(--red);background:rgba(192,57,43,.16);}
   /* header memory button — red, opens the disable modal */
@@ -780,8 +789,13 @@ _LANDING_HTML = r"""<!doctype html>
   .collap-bar:hover{border-color:rgba(143,199,255,.55);}
   .collap-bar .cb-title{display:flex;align-items:center;gap:10px;font-size:12.5px;letter-spacing:.04em;}
   .collap-bar .cb-count{color:var(--glacier);font-weight:700;}
-  .collap-bar .cb-caret{transition:transform .22s ease;color:var(--muted);font-size:11px;flex:0 0 auto;}
-  .collap-bar.open .cb-caret{transform:rotate(180deg);}
+  .collap-bar .cb-caret{display:inline-flex;width:22px;height:22px;border-radius:50%;
+    border:1px solid rgba(143,199,255,.35);color:var(--glacier);
+    align-items:center;justify-content:center;font-size:10px;flex:0 0 auto;
+    transition:all .2s ease;}
+  .collap-bar:hover .cb-caret{background:rgba(143,199,255,.12);
+    box-shadow:0 0 10px rgba(143,199,255,.25);}
+  .collap-bar.open .cb-caret{transform:rotate(180deg);background:rgba(143,199,255,.16);}
   .collap-wrap{display:none;margin-top:14px;}
   .collap-wrap.open{display:block;}
   /* the ACP rail's bar is green + a different accent so it never reads
@@ -790,7 +804,10 @@ _LANDING_HTML = r"""<!doctype html>
     border-color:rgba(39,174,96,.42);border-radius:12px 12px 12px 4px;}
   .collap-bar.green:hover{border-color:rgba(39,174,96,.7);}
   .collap-bar.green .cb-count{color:var(--green);}
-  .collap-bar.green .cb-caret{color:var(--green);}
+  .collap-bar.green .cb-caret{color:var(--green);border-color:rgba(39,174,96,.45);}
+  .collap-bar.green:hover .cb-caret{background:rgba(39,174,96,.12);
+    box-shadow:0 0 10px rgba(39,174,96,.25);}
+  .collap-bar.green.open .cb-caret{background:rgba(39,174,96,.16);}
 
   /* per-card "how derived" — an expandable, data-derived explanation inside
      each remember card. Collapsed by default; opens when the card is tapped. */
@@ -804,10 +821,18 @@ _LANDING_HTML = r"""<!doctype html>
   .rw-derive p:last-child{margin-bottom:0;}
   .rw-derive b{color:var(--text);font-weight:600;}
   .rw-derive .gl{color:var(--glacier);} .rw-derive .gr{color:var(--green);} .rw-derive .rd{color:var(--red);}
-  .rw-more{margin-top:10px;font-family:var(--mono);font-size:10px;color:var(--muted);letter-spacing:.05em;
-    transition:color .18s ease;}
-  .rw-card:hover .rw-more{color:var(--glacier);}
-  .rw-card.open .rw-more{color:var(--glacier);}
+  .rw-more{display:inline-flex;align-items:center;gap:8px;margin-top:10px;
+    font-family:var(--mono);font-size:10px;color:var(--muted);letter-spacing:.05em;
+    border:1px solid var(--border);border-radius:20px;padding:5px 12px 5px 6px;
+    transition:all .18s ease;}
+  .rw-more::before{content:"+";display:inline-flex;width:18px;height:18px;border-radius:50%;
+    background:rgba(143,199,255,.08);border:1px solid rgba(143,199,255,.3);color:var(--glacier);
+    align-items:center;justify-content:center;font-size:12px;line-height:1;flex:0 0 auto;
+    transition:all .18s ease;}
+  .rw-card:hover .rw-more{color:var(--glacier);border-color:rgba(143,199,255,.4);
+    box-shadow:0 0 10px rgba(143,199,255,.15);}
+  .rw-card.open .rw-more{color:var(--glacier);border-color:rgba(143,199,255,.45);}
+  .rw-card.open .rw-more::before{content:"−";background:rgba(143,199,255,.16);}
 
   @media (max-width:560px){
     .rw-t-steps{gap:4px;}
@@ -869,12 +894,20 @@ _LANDING_HTML = r"""<!doctype html>
   .ep-room{font-family:var(--mono);font-size:10px;letter-spacing:.14em;text-transform:uppercase;
     color:var(--muted);display:block;margin-bottom:8px;}
   .ep-brief{color:var(--dim);font-size:12.5px;line-height:1.55;margin:0;overflow-wrap:anywhere;}
-  .ep-more{display:block;margin-top:10px;font-family:var(--mono);font-size:11px;letter-spacing:.06em;
-    color:var(--muted);transition:color .15s ease;}
-  .ep-card:hover .ep-more,.ep-card.open .ep-more{color:var(--glacier);}
-  .ep-more .arr{display:inline-block;transition:transform .2s ease;margin-left:4px;}
-  .ep-card.open .ep-more .arr{transform:rotate(90deg);}
-  .ep-card.danger.open .ep-more,.ep-card.danger:hover .ep-more{color:#ff8a7a;}
+  .ep-more{display:inline-flex;align-items:center;gap:8px;margin-top:10px;
+    font-family:var(--mono);font-size:11px;letter-spacing:.06em;
+    color:var(--muted);border:1px solid var(--border);border-radius:20px;
+    padding:5px 7px 5px 12px;transition:all .18s ease;cursor:pointer;}
+  .ep-card:hover .ep-more,.ep-card.open .ep-more{color:var(--glacier);border-color:rgba(143,199,255,.4);
+    box-shadow:0 0 10px rgba(143,199,255,.15);}
+  .ep-more .arr{display:inline-flex;width:20px;height:20px;border-radius:50%;
+    border:1px solid rgba(143,199,255,.35);color:var(--glacier);
+    align-items:center;justify-content:center;font-size:11px;margin:0;
+    transition:all .2s ease;flex:0 0 auto;}
+  .ep-card.open .ep-more .arr{transform:rotate(90deg);background:rgba(143,199,255,.14);}
+  .ep-card.danger.open .ep-more,.ep-card.danger:hover .ep-more{color:#ff8a7a;border-color:rgba(255,138,122,.4);
+    box-shadow:0 0 10px rgba(192,57,43,.2);}
+  .ep-card.danger .ep-more .arr{border-color:rgba(255,138,122,.4);color:#ff8a7a;}
   .ep-detail{display:grid;grid-template-rows:0fr;transition:grid-template-rows .28s ease;}
   .ep-detail > div{overflow:hidden;}
   .ep-card.open .ep-detail{grid-template-rows:1fr;}
@@ -1029,7 +1062,7 @@ _LANDING_HTML = r"""<!doctype html>
       </div>
       <div class="bar-row bottom">
         <div class="nav">
-          <a href="/gallery" data-tip="The workbench: pick a counterparty, run a function, watch memory decide — then it hands you the next step." data-tip-pos="below">try it live</a>
+          <a href="/gallery" class="try-live" data-tip="The workbench: pick a counterparty, run a function, watch memory decide — then it hands you the next step." data-tip-pos="below">try it live</a>
           <a href="/house/ledger" data-tip="Raw JSON: every caller, trust score, dedup state." data-tip-pos="below">ledger</a>
           <a href="/manifest" data-tip="The house's machine-readable service manifest: every endpoint and its price." data-tip-pos="below">manifest</a>
         </div>
@@ -2067,7 +2100,7 @@ __TRYIT_JS__
       if(e.target.closest(".rw-addr")){return;} // don't fight the link
       card.classList.toggle("open");
       var more=card.querySelector(".rw-more");
-      if(more){more.textContent=card.classList.contains("open")?"collapse ▴":"how is this derived? ▾";}
+      if(more){more.textContent=card.classList.contains("open")?"collapse":"how is this derived?";}
     });
   })();
 
@@ -2434,7 +2467,7 @@ __TRYIT_JS__
         +"<div class='rw-row'><span>serves</span><span class='v'>"+(c.served!=null?c.served:(c.served_count!=null?c.served_count:0))+"</span></div>"
         +"<div class='rw-row'><span>txs</span><span class='v'>"+(c.tx_count!=null?c.tx_count:0)+"</span></div>"
         +"<div class='rw-derive'><div class='d-inner'><div class='d-k'>how this was derived</div>"+callerDerive(c)+"</div></div>"
-        +"<div class='rw-more'>how is this derived? ▾</div>"
+        +"<div class='rw-more'>how is this derived?</div>"
         +"</div>";
     }
     for(var i=0;i<provs.length;i++){
@@ -2451,7 +2484,7 @@ __TRYIT_JS__
         +"<div class='rw-row'><span>jobs</span><span class='v'>"+(p.jobs_done!=null?p.jobs_done:0)+"</span></div>"
         +"<div class='rw-row'><span>terms</span><span class='v'>"+(p.hired?"drafted":"refused")+"</span></div>"
         +"<div class='rw-derive'><div class='d-inner'><div class='d-k'>how this was derived</div>"+providerDerive(p)+"</div></div>"
-        +"<div class='rw-more'>how is this derived? ▾</div>"
+        +"<div class='rw-more'>how is this derived?</div>"
         +"</div>";
     }
     var memMode=S.memory||"live";
