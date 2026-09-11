@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 from pathlib import Path
 from typing import Any, Optional
 
@@ -170,6 +171,15 @@ class HouseMemory:
                 self._real_m = self._null
         self._m = self._null
         self._mode = "purged"
+        # Leave a marker beside the DB so a later restart can tell "purged
+        # on purpose" apart from "fresh deploy, never had data". The boot
+        # re-seed (seller lifespan) restores chain-proven callers ONLY when
+        # this marker is absent — a purge stays blind across restarts.
+        try:
+            marker = Path(self.db_path).expanduser().parent / ".house-purged"
+            marker.write_text(str(time.time()))
+        except Exception:  # noqa: BLE001 - best-effort marker
+            pass
 
     def restore(self) -> None:
         """Legacy reconnect helper — retained for the deletion harness. NOTE:

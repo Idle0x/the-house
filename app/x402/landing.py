@@ -116,8 +116,8 @@ def build_landing_state(*, memory_mode: str, callers: list, providers: list,
             "providers": len(providers),
             "dedup_hits": int(dedup.get("hits", 0)),
             "usdc_saved": round(float(dedup.get("usdc_saved", 0.0)), 4),
-            "trust": round(sum(c.get("trust_score", 0) for c in callers) / len(callers), 1) if callers else 0,
-            "quality": round(sum(p.get("quality_score", 0) for p in providers) / len(providers), 2) if providers else 0,
+            "trust": round(sum(float(c.get("trust_score") or 0) for c in callers) / len(callers), 1) if callers else 0,
+            "quality": round(sum(float(p.get("quality_score") or 0) for p in providers) / len(providers), 2) if providers else 0,
             "jobs": sum(p.get("jobs_done", 0) for p in providers),
             "scars": scars_total,
             "rules": scars_rules,
@@ -472,6 +472,22 @@ _LANDING_HTML = r"""<!doctype html>
   .room-table .seg.new{color:var(--dim);}
   .room-table .seg.banned,.room-table .seg.risky{color:var(--red);}
   .empty{font-family:var(--mono);font-size:12px;color:var(--muted);padding:14px 2px;}
+
+  /* ---------- scoring docs ---------- */
+  .score-list{border:1px solid var(--border);border-radius:12px;overflow:hidden;background:var(--surface);
+    background-image:linear-gradient(180deg,rgba(255,255,255,.018),rgba(255,255,255,0) 30%);
+    box-shadow:inset 0 1px 0 rgba(255,255,255,.03);}
+  .score-row{display:grid;grid-template-columns:110px 1fr;gap:14px;padding:13px 18px;
+    border-bottom:1px solid var(--border);align-items:baseline;}
+  .score-row:last-child{border-bottom:none;}
+  .score-row .delta{font-family:var(--mono);font-weight:700;font-size:14px;white-space:nowrap;
+    font-variant-numeric:tabular-nums;}
+  .score-row .delta.up{color:var(--green);}
+  .score-row .delta.flat{color:var(--glacier);}
+  .score-row .delta.down{color:var(--red);}
+  .score-row .what{font-size:13.5px;color:var(--dim);line-height:1.6;}
+  .score-row .what b{color:var(--text);font-weight:600;}
+  @media(max-width:560px){.score-row{grid-template-columns:1fr;gap:4px;}}
 
   /* ---------- ACP / Virtuals ---------- */
   .acp{border:1px solid var(--border);border-radius:12px;background:var(--surface);
@@ -1341,6 +1357,21 @@ _LANDING_HTML = r"""<!doctype html>
           <a class="btn ghost sm" href="/gallery?fn=intel_entity">try it — entity dossier</a>
         </div>
         <div id="room4"></div>
+      </div>
+    </section>
+
+    <!-- HOW TRUST IS EARNED -->
+    <section class="section reveal" id="scoring">
+      <h2 data-tip="The exact rules behind every trust number on this page. No hidden formula: what moves a score, what freezes it, and what lowers it.">how trust is earned</h2>
+      <div class="lead">Every wallet starts at <em>50</em>. What happens next is written down here.</div>
+      <div class="score-list">
+        <div class="score-row"><span class="delta flat">50 start</span><span class="what">Every new wallet begins at trust 50, band <b>new</b>, paying full list price. Strangers until served.</span></div>
+        <div class="score-row"><span class="delta up">+3</span><span class="what">Each <b>new question answered</b> and each <b>dossier served</b>. Nine of these from 53 reaches 80 — VIP. Only paid, completed serves count.</span></div>
+        <div class="score-row"><span class="delta flat">±0 repeat</span><span class="what">Asking the <b>exact same question twice</b> is served free — and adds nothing. Otherwise trust could be farmed for free.</span></div>
+        <div class="score-row"><span class="delta flat">±0 rooms</span><span class="what">Reports, hire rulings, screens, bonds and prepay build <b>provider</b> records and journals — not your personal score.</span></div>
+        <div class="score-row"><span class="delta down">−8 fault</span><span class="what">Failures you cause (bad requests, timeouts you trigger). Three warnings makes a wallet <b>risky</b>: 30% surcharge, prepay required.</span></div>
+        <div class="score-row"><span class="delta down">−15 dispute</span><span class="what">Refunds and disputes. Three makes a wallet <b>banned</b>: refused before money moves, never charged.</span></div>
+        <div class="score-row"><span class="delta flat">bands</span><span class="what"><b>new</b> ×1.00 · <b>regular</b> (3+ visits) ×0.95 · <b>vip</b> (80+, 10+ visits) ×0.80 · <b>risky</b> ×1.30. Discounts settle full price, then return as cashback.</span></div>
       </div>
     </section>
 

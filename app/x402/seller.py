@@ -257,6 +257,33 @@ async def lifespan(app: FastAPI):
     log.info("startup: wallet_ok=%s resumed=%d driven=%s",
              info["wallet_ok"], info["resumed"], info["driven"])
 
+    # Boot re-seed (Model A: true deletion + re-seed): a FRESH, EMPTY store
+    # re-learns the chain-proven caller set (who verifiably paid, how often)
+    # from Base receipts before serving. Gates, in order:
+    #   * memory disabled (SIBYL_DISABLED) → skip (reads are empty anyway)
+    #   * purge marker present → skip (a purge stays blind, across restarts)
+    #   * any caller rows exist → skip (never touch live state)
+    #   * pytest running → skip (no network in unit tests)
+    #   * HOUSE_RESEED_ON_BOOT=0 → skip (explicit opt-out)
+    # Best-effort and non-fatal: RPC failure leaves a clean cold-start.
+    try:
+        memory: HouseMemory = app.state.memory  # type: ignore[attr-defined]
+        marker = Path(memory.db_path).expanduser().parent / ".house-purged"
+        reseed_off = os.getenv("HOUSE_RESEED_ON_BOOT", "1").strip().lower() in (
+            "0", "false", "no")
+        if (not memory.disabled() and not marker.exists()
+                and not memory.list_entities("caller", limit=5)
+                and not os.getenv("PYTEST_CURRENT_TEST")
+                and not reseed_off):
+            from core.reseed import reseed_from_chain
+            summary = reseed_from_chain(memory, house_wallet=_house_wallet())
+            log.info("startup: reseed restored=%s",
+                     summary.get("restored", summary))
+        elif marker.exists():
+            log.info("startup: purge marker present — staying blind, no reseed")
+    except Exception:  # noqa: BLE001 - reseed never breaks boot
+        log.exception("startup: reseed failed (non-fatal)")
+
     # Background auto-re-enable for the reversible soft-off (disable). Purge
     # is permanent — this loop never touches a purged store.
     stop = asyncio.Event()

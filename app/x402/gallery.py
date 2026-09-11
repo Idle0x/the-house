@@ -260,6 +260,15 @@ _GALLERY_HTML = r"""<!doctype html>
   .csec .h .r{font-family:var(--mono);font-size:10px;color:var(--muted);}
   .csec .body{padding:14px;}
   .csec .empty{font-family:var(--mono);font-size:11px;color:var(--muted);padding:6px 2px;}
+  /* collapsible console sections (score activity) — same toggle language */
+  .csec .h.toggle{cursor:pointer;user-select:none;-webkit-user-select:none;}
+  .csec .h .chev{display:inline-flex;width:22px;height:22px;border-radius:50%;
+    border:1px solid var(--border2);color:var(--muted);font-size:9px;
+    align-items:center;justify-content:center;transition:all .2s ease;flex:0 0 auto;}
+  .csec .h.toggle:hover .chev{border-color:rgba(143,199,255,.45);color:var(--glacier);
+    box-shadow:0 0 10px rgba(143,199,255,.2);}
+  .csec.closed .body{display:none;}
+  .csec.closed .h .chev{transform:rotate(-90deg);}
 
   .runline{display:flex;align-items:center;gap:11px;flex-wrap:wrap;}
   .runline .path-badge{font-family:var(--mono);font-size:10.5px;color:var(--glacier);
@@ -958,6 +967,10 @@ __TRYIT_JS__
     h+=renderTrace(subj);
     h+="</div></div>";
 
+    // 3b · SCORE ACTIVITY — this wallet's own journal, each line translated
+    // into why the score moved (or didn't). Header toggles the list.
+    h+="<div class='csec' id='activity-sec'><div class='h toggle' id='activity-head'><span class='l'><span class='step-badge'>•</span>score activity</span><span class='r'>why this wallet's score moved <span class='chev'>▾</span></span></div><div class='body' id='activity-body'><div class='empty'>loading this wallet's history…</div></div></div>";
+
     // 4 · ARTIFACT
     h+="<div class='csec'><div class='h'><span class='l'><span class='step-badge'>4</span>artifact · onchain</span><span class='r'>Basescan-decodable</span></div><div class='body' id='artifact-body'><div class='empty'>settle to produce an onchain artifact</div></div></div>";
 
@@ -972,6 +985,7 @@ __TRYIT_JS__
     body.innerHTML=h;
     bindConsole();
     fetchQuote();
+    fetchActivity();
   }
 
   // Full agent brief: goal, exact endpoint, the x402 signing flow, what the
@@ -1190,10 +1204,30 @@ __TRYIT_JS__
         toast("signing…","ok");
         fetch(url,opts).then(function(res){
           if(res.ok){
+            var beforeTrust=(S.subject&&S.subject.trust!=null)?S.subject.trust:null;
             toast("settled — the house served you and is writing memory","ok");
             renderArtifact(wallet.address, a);
             // refresh the ledger so the subject list updates
             refreshAll();
+            // then read the wallet's row back and announce the exact delta —
+            // the number in the toast is measured, never a hardcoded +3
+            fetchJson("/house/ledger").then(function(j){
+              var row=null;
+              if(j&&j.callers){
+                var want=String(wallet.address||"").slice(-6).toLowerCase();
+                for(var i=0;i<j.callers.length;i++){
+                  if(String(j.callers[i].addr_last6||"").toLowerCase()===want){ row=j.callers[i]; break; }
+                }
+              }
+              var after=(row&&row.trust_score!=null)?row.trust_score:null;
+              var del=$("artifact-delta");
+              if(beforeTrust!=null&&after!=null){
+                var d=Math.round((after-beforeTrust)*10)/10;
+                var ds=(d>0?"+":"")+d;
+                if(del){ del.textContent="trust "+beforeTrust+" → "+after+" ("+ds+")"; }
+                toast("settled — trust "+beforeTrust+" → "+after+" ("+ds+")","ok");
+              } else if(del){ del.textContent="served — see subjects"; }
+            });
           } else {
             // verify failures arrive as a 402 whose payment-required header
             // carries the facilitator's reason — surface THAT, not the {} body.
@@ -1217,9 +1251,43 @@ __TRYIT_JS__
       +"<div class='qcell'><div class='k'>payer</div><div class='v'><a href='https://basescan.org/address/"+esc(payer)+"' target='_blank' rel='noopener'>"+esc(payer.slice(0,8))+"…"+esc(payer.slice(-6))+"</a></div></div>"
       +"<div class='qcell'><div class='k'>settled</div><div class='v gr'>"+(a?money(parseInt(a.amount,10)/1000000):"—")+" USDC</div></div>"
       +"<div class='qcell'><div class='k'>receiver</div><div class='v'>"+(a?esc(a.payTo.slice(0,8))+"…"+esc(a.payTo.slice(-6)):"—")+"</div></div>"
-      +"<div class='qcell'><div class='k'>memory delta</div><div class='v am'>trust → +3</div></div>"
+      +"<div class='qcell'><div class='k'>memory delta</div><div class='v am' id='artifact-delta'>recording…</div></div>"
       +"</div>";
     el.innerHTML=h;
+  }
+
+  // ---------- score activity: this wallet's journal, translated ----------
+  function explainKind(kind, text){
+    var k=String(kind||"").toLowerCase(), t=String(text||"");
+    if(k==="served"||/Δ\+/.test(t)) return "paid serve — trust moved up";
+    if(k==="repeat") return "exact repeat — served free, trust frozen (anti-farming)";
+    if(k==="prepay") return "store credit funded or spent — no trust change";
+    if(k==="refuse"||k==="refusal"||/refus/.test(t)) return "refused before money moved — uncharged, no trust change";
+    if(k==="failure"||k==="scar") return "failure recorded — future policy hardens here; faults cost trust";
+    if(k==="paid"||k==="settlement") return "USDC moved on Base — receipt";
+    if(k==="job") return "background work completed";
+    if(k==="screen") return "risk screen published to the feed";
+    return "house bookkeeping";
+  }
+  function fetchActivity(){
+    var box=$("activity-body"); if(!box||!S.subject) return;
+    fetchJson("/house/journal").then(function(j){
+      var ev=(j&&j.events)||S.journal||[];
+      var frag=String(S.subject.last||"").slice(-4).toLowerCase();
+      var rows=[];
+      for(var i=0;i<ev.length&&rows.length<8;i++){
+        var tx=String((ev[i].text||"")+" "+(ev[i].kind||"")).toLowerCase();
+        if(frag&&tx.indexOf(frag)>=0){ rows.push(ev[i]); }
+      }
+      if(!rows.length){ box.innerHTML="<div class='empty'>no recorded events for this wallet yet — its first paid serve will appear here with the reason.</div>"; return; }
+      var h="<div class='trace'>";
+      for(var r=0;r<rows.length;r++){
+        var kind=String(rows[r].kind||"info");
+        var tag=(kind==="served"||kind==="repeat")?"ok":"";
+        h+="<div class='tr'><span class='n'>•</span><span class='tx'><span class='tt'>"+esc(rows[r].ts||"")+" · "+esc(kind)+"</span><br><span class='td'>"+esc(rows[r].text||"")+"<br>→ "+esc(explainKind(kind,rows[r].text))+"</span></span><span class='tag "+tag+"'>"+esc(kind)+"</span></div>";
+      }
+      box.innerHTML=h+"</div>";
+    });
   }
 
   // ---------- console bind ----------
@@ -1242,6 +1310,10 @@ __TRYIT_JS__
     }); }
     var cw=$("connect-wallet"); if(cw){ cw.addEventListener("click",connectWallet); }
     var ws=$("wallet-settle"); if(ws){ ws.addEventListener("click",walletSettle); }
+    var ahead=$("activity-head");
+    if(ahead){ ahead.addEventListener("click",function(){
+      var sec=$("activity-sec"); if(sec){ sec.classList.toggle("closed"); }
+    }); }
     // next steps
     var nb=$("next-btns"); if(nb){ nb.innerHTML=renderNext(); var nbs=nb.querySelectorAll(".nb");
       for(var n=0;n<nbs.length;n++){

@@ -77,6 +77,24 @@ def test_landing_reads_state_live_and_collapses_disabled(tmp_path, monkeypatch):
     assert manifest2["stats"]["live_callers"] == 0
 
 
+def test_landing_survives_sparse_rows():
+    """Sparse memory rows (e.g. a watch-screen upsert with null trust /
+    quality) must not 500 the landing page — aggregates treat null as 0."""
+    from app.x402.landing import build_landing_state
+    st = build_landing_state(
+        memory_mode="live",
+        callers=[{"address": "0x3a10cab4", "address_last6": "3a10cab4",
+                  "segment": None, "trust_score": None, "tx_count": None,
+                  "net_charged_usdc": 0.0}],
+        providers=[{"provider": "0xp", "provider_last6": "xxxxxx",
+                    "segment": None, "hired": False, "jobs_done": 0,
+                    "quality_score": None}],
+        dedup={"hits": 0, "usdc_saved": 0.0}, scars_total=0, scars_rules=0,
+        commit="abc1234", base_price=0.01, repo_url="", ts="t",
+        wipe_status={}, public_url="")["stats"]
+    assert st["trust"] == 0 and st["quality"] == 0 and st["callers"] == 1
+
+
 def test_free_routes_gated_and_startup_prunes(tmp_path, monkeypatch):
     """/house/jobs is free (shows the F4 state machines); /intel/quote is PAID
     (402 without payment). POST /house/compile is capability-gated and turns 3

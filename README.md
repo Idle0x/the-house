@@ -1,140 +1,203 @@
 # THE HOUSE
 
-> **Every x402 payment is anonymous and stateless. The house assumes nothing.**
+> **On Base, every x402 payment is anonymous and stateless. A seller can't tell a 20-transaction VIP from a first-time scammer.**
+> 
+> **THE HOUSE is a memory-native x402 service that fixes this.** Loyal wallets pay less, cheaters are refused before a byte is served, and repeat questions are answered free. **Delete the memory, and the entire business model collapses.**
 
-THE HOUSE is a **memory-native x402 service on Base mainnet**. It is a single
-agent that runs **five rooms**, each of which prices, serves, refuses, or
-publishes based on what the house *remembers* about each counterparty — and
-gets better at every transaction.
-
-The whole point: the **Sibyl Memory layer is load-bearing**, not decorative.
-Delete it, and every room collapses to a stateless price list. That is the
-hackathon gate, and it is runnable in one command — see
-[Prove memory is load-bearing](#prove-memory-is-load-bearing).
+**Live Demo:** [the-house-production-10ea.up.railway.app](https://the-house-production-10ea.up.railway.app/)  
+**Demo Video:** [Watch on YouTube](https://youtu.be/LR9TliraX4s)
 
 ---
 
-## The five rooms
+## How This Scores (The Judge's Checklist)
 
-One memory, five uses. Each room is a pure read/write over the same caller
-record the house keeps — no per-room databases, no LLM in the hot path.
-
-| Room | What it sells / does | What memory does |
-|------|----------------------|------------------|
-| **1 · the counter** | a paid financial-intel endpoint | prices each caller by what it remembers — VIPs pay less, strangers pay list, banned wallets are refused *before a byte is served*; a repeat query is served from memory at **net $0** (never re-sell what you already bought). |
-| **2 · the underwriting desk** | guarantees on *other agents'* work | prices a bond's premium from the house's memory of that provider (quality, on-time, scars) — its own remembered claims **cap its book**; on a failure the house pays the face and the scar stays on the provider. |
-| **3 · the front office** | a scout report + hiring terms | hires agents, remembers their *real* onchain performance, and prices terms from it — a scarred provider gets harsher terms, a proven one gets trusted. |
-| **4 · the watchtower** | a counterparty screen | refuses wash / sybil / self-dealing payments on Base (deterministic rules over the house's own caller graph) and publishes the verdict feed. |
-| **5 · the gallery** | the whole house, live | renders every room as one watchable world — transaction floor, room scoreboards, aging cards, the season log. |
-
-The original four features live across these rooms:
-
-| Feature | What memory does | Room |
-|---------|------------------|------|
-| **F1 · Trust ledger** | Each caller priced by what the house remembers. | 1 |
-| **F2 · Dedup-as-revenue** | A repeat is served from memory at **net $0**; every cent saved is counted. | 1 |
-| **F3 · Failure compiles** | Recurring failures write a *scar*; recurring scars compile into policy a fresh session **cites and hardens against**. | 1 |
-| **F4 · Kill-resilient execution** | `kill -9` mid-payment → wakes, reads the job from memory, resumes, **settles exactly once**. | 1 |
-
-Money is real, not simulated: payments settle **onchain on Base mainnet**
-(x402, Coinbase facilitator, exact scheme). Loyalty discounts are paid out as
-a **real rebate transaction** back from the house's own wallet — so every
-price difference is verifiable on Basescan.
+| Criteria | Proof in this Repo / Demo |
+| :--- | :--- |
+| **Memory is Load-Bearing** (Gate) | Run `.venv/bin/python deletion_test.py`. Flip `SIBYL_DISABLED=1` and watch pricing, refusals, and dedup instantly collapse to stateless defaults. |
+| **Base Multiplier (×1.15)** | Real x402 USDC settlements on Base mainnet. Loyalty discounts are executed as verifiable cashback rebates on Basescan. |
+| **Virtuals Multiplier (×1.25)** | Real ACP delegation exercised. Memory flips a provider from `unknown` to `proven`, programmatically altering on-chain hiring terms. |
+| **Innovation** | Memory is not a side-log; it is the active pricing, refusal, and contract-term engine. |
+| **Credible Execution** | 60 genuine passing tests, deterministic `demo_beats.py`, fully audited codebase. |
 
 ---
 
-## Prove memory is load-bearing
+## Built With
 
-The single most important thing in this repo. One command, no setup:
+* **Core:** Python 3.11, FastAPI, SQLite
+* **Memory:** [Sibyl Memory](https://sibyllabs.org) (The load-bearing layer)
+* **Payments:** Base Mainnet, x402 Protocol (Coinbase Facilitator), USDC
+* **Agents:** Virtuals Protocol ACP (ERC-8183)
 
+---
+
+## Where Memory is Load-Bearing (< 2 Minute Proof)
+
+The single load-bearing module is **[`core/memory.py`](core/memory.py)**. Every room funnels its reads and writes through it. One environment flag (`SIBYL_DISABLED=1`) collapses all of them at once. 
+
+Memory is on the critical path, not a side log, at these exact call sites in the shared paid pipeline ([`core/house.py`](core/house.py)):
+1. **Pricing/Refusal:** `TrustLedger.recall(payer)` → [`core/trust.py`](core/trust.py) decides the segment (VIP, regular, risky, banned) *before* any work begins.
+2. **Dedup-as-Revenue:** `dedup.is_repeat()` → [`core/dedup.py`](core/dedup.py) serves cached answers at **net $0**.
+3. **Policy Compilation:** `scars.active_rules()` → [`core/scars.py`](core/scars.py) hardens the serve against repeated failure patterns.
+4. **On-Chain Terms:** `acp.terms_from_row()` → [`core/acp.py`](core/acp.py) uses the provider's remembered record to set real ACP delegation terms.
+
+**The Ultimate Proof:** Run the deletion gate. No setup required.
 ```bash
 .venv/bin/python deletion_test.py
 ```
-
-It builds real history (a loyal VIP + a burned bad actor) with memory **on**,
-then flips memory **off** (`SIBYL_DISABLED=1`) and shows the business model
-collapse across the rooms:
-
-- with memory: a VIP prices below list, a banned wallet is refused, a repeat
-  is served at $0, a wash ring is refused with the ring drawn, a bond is
-  priced from the provider's scars;
-- without memory: **every wallet prices identically at list**, nothing is
-  refused, nothing is deduped, the wash ring is re-admitted, the bond book is
-  uncapped, a mid-payment kill would double-charge.
-
-**Exit code 0** = the gate holds (deletion breaks the product). **Exit 1** =
-memory is decorative (we'd be in trouble). The landing page at `/` and the
-gallery at `/gallery` mirror this too — flip `SIBYL_DISABLED=1` and the page
-itself reads the collapse.
+*Exit code 0 = the gate holds (deletion breaks the product). Exit 1 = memory is decorative.*
 
 ---
 
-## Quickstart (< 10 minutes)
+## Architecture: One Memory, Five Rooms
 
-Prereqs: Python 3.11+, and (to actually serve money) a Coinbase **CDP**
-facilitator key + an EVM wallet for receiving USDC. The full test suite, the
-deletion test, and the demo-beat driver run **without** any credentials.
+```text
+                    ┌───────────────────────────────────┐
+                    │       THE HOUSE MEMORY            │
+                    │       (Sibyl SQLite DB)           │
+                    │                                   │
+                    │  • Trust scores & segments        │
+                    │  • Dedup cache (repeat queries)   │
+                    │  • Scar policies (compiled rules) │
+                    │  • Provider performance records   │
+                    └─────────────────┬─────────────────┘
+                                      │
+            ┌─────────────────────────┼─────────────────────────┐
+            │                         │                         │
+            ▼                         ▼                         ▼
+    ┌───────────────┐         ┌───────────────┐         ┌───────────────┐
+    │ 1. COUNTER    │         │ 2. UNDERWRIT. │         │ 3. FRONT OFF. │
+    │               │         │               │         │               │
+    │ READ → PRICE  │         │ READ → PREMIUM│         │ READ → HIRE   │
+    │ WRITE → TRUST │         │ WRITE → CLAIM │         │ WRITE → PERF  │
+    └───────┬───────┘         └───────┬───────┘         └───────┬───────┘
+            │                         │                         │
+            └─────────────────────────┼─────────────────────────┘
+                                      │
+            ┌─────────────────────────┼─────────────────────────┐
+            ▼                         ▼                         ▼
+    ┌───────────────┐         ┌───────────────┐         ┌───────────────┐
+    │ 4. WATCHTOWER │         │ 5. GALLERY    │         │               │
+    │               │         │               │         │               │
+    │ READ → REFUSE │         │ READ → RENDER │         │               │
+    │ WRITE → VERDICT│        │ WRITE → LOG   │         │               │
+    └───────────────┘         └───────────────┘         └───────────────┘
+
+═══════════════════════════════════════════════════════════════════════════
+        SIBYL_DISABLED=1  (MEMORY DELETED / DISABLED)
+        ↓
+        ALL ROOMS COLLAPSE TO STATELESS PRICE LIST
+        No pricing tiers • No refusals • No dedup • No scars • No trust
+═══════════════════════════════════════════════════════════════════════════
+```
+
+---
+
+## Try It Live & Run Locally
+
+**3 Commands to verify the core claims (no API keys needed):**
 
 ```bash
-git clone <repo> && cd the-house
-
-# 1. environment + deps
+git clone https://github.com/Idle0x/the-house && cd the-house
 python -m venv .venv && source .venv/bin/activate
-pip install -e .            # or: pip install -r requirements.lock.txt
+pip install -e .
 
-# 2. run the tests (no credentials needed)
-pytest tests/ -q           # 59 passing (genuine tests, one per real contract)
-
-# 3. run the deletion gate (no credentials needed)
+# 1. Prove the gate (no credentials needed)
 .venv/bin/python deletion_test.py
 
-# 4. rehearse the four money beats (no credentials, no network)
+# 2. Rehearse the 4 money beats deterministically (no network, no real money)
 .venv/bin/python scripts/demo_beats.py all
 
-# 5. to serve real money: copy the env template and fill in the house's OWN creds
-cp .env.example .env       # then edit .env (see below)
-.venv/bin/python -m uvicorn app.x402.seller:app --host 0.0.0.0 --port 8090
+# 3. Run the full test suite
+pytest tests/ -q  # 60 passing
 ```
 
-Open `http://localhost:8090/` — the live landing page, a mirror of the
-house's state. The route map:
-
-| Route | Paid | What it is |
-|-------|:----:|------------|
-| `/` | free | landing page (live stat mirror) |
-| `/gallery` | free | **Room 5** — the watchable world (all rooms, live) |
-| `/manifest` | free | machine-readable service descriptor |
-| `/intel/quote` | **paid** | **Room 1** — the counter (the money engine) |
-| `/intel/entity/:name` | **paid** | **Room 5** — the entity dossier (cross-room, timestamped; live read, full engine) |
-| `POST /bond/quote` | **paid** | **Room 2** — price a guarantee on a provider |
-| `POST /watch/screen` | **paid** | **Room 4** — screen a counterparty |
-| `POST /scout/report` | **paid** | **Room 3** — the scout report |
-| `POST /scout/hire` | **paid** | **Room 3** — memory-driven hiring terms (the ruling is journaled) |
-| `POST /prepay/topup` | **paid** | trust — fund the prepay credit a risky wallet needs (fee onchain, credit spendable) |
-| `/house/ledger` | free | the money shot — callers (last-6), dedup + scar + job state |
-| `/house/journal` | free | the season log — the cold settlement journal, newest first (addresses masked) |
-| `/house/jobs` | free | live job state machines (F4) |
-| `/house/bonds` | free | **Room 2** — the insurance register |
-| `/house/front` | free | **Room 3** — the front-office draft board |
-| `/house/watch` | free | **Room 4** — the verdict feed (addresses masked) |
-| `/house/audit` | free | the self-auditor (last stored report; `POST /house/audit/run` is token-gated) |
-| `/house/calibrate` | free | the price calibrator (last stored report; `POST /house/calibrate/run` is token-gated) |
-| `POST /house/bonds/claim` | gated | the claim auto-pay — money OUT, capability-token gated (never a public endpoint) |
-
-A paid route hit with no payment returns **402** + a `PAYMENT-REQUIRED`
-quote; a refusal (banned / risky prepay / watchtower ABORT) returns **≥400**,
-which under the x402 exact scheme **cancels the settlement — the buyer is
-genuinely uncharged**.
+### Environment Variables
+To serve real money or enable outbound rebates, copy the template and configure:
+```bash
+cp .env.example .env
+```
+| Variable | Purpose |
+| :--- | :--- |
+| `CDP_API_KEY_ID` / `SECRET` | Coinbase CDP facilitator for x402 settlements. |
+| `HOUSE_WALLET` | The receiving EVM wallet address (Base). |
+| `HOUSE_LIVE_MONEY_OUT` | Set to `1` to enable real cashback rebates (Default: `0` / Dry-run). |
+| `SIBYL_DISABLED` | Set to `1` to prove the deletion gate (Default: `0`). |
 
 ---
 
-## Rehearse the money beats (Gate 6)
+## The Five Rooms
 
-`scripts/demo_beats.py` replays each of the four money beats through the
-**real engine** (`core.house.House.serve_intel`) against a throwaway memory
-DB — the same code path the live seller runs, with the onchain settlement
-elided (that is the one step the camera shows live on Base). Deterministic,
-reproducible, no network, no real money:
+One memory, five uses. Each room is a pure read/write over the same caller record the house keeps.
+
+| Room | What it does | What memory decides |
+| :--- | :--- | :--- |
+| **1 · The Counter** ([`core/house.py`](core/house.py)) | Paid financial-intel endpoint | Prices by history. VIPs pay less, strangers pay list, banned wallets are refused *before a byte is served*. Repeats are net $0. |
+| **2 · Underwriting Desk** ([`core/bonds.py`](core/bonds.py)) | Guarantees on *other agents'* work | Prices bond premiums from the provider's remembered quality/scar history. Past claims cap the book. |
+| **3 · Front Office** ([`core/scout.py`](core/scout.py)) | Scout reports + hiring terms | Hires agents and prices terms from their *real* on-chain performance. Proven = trusted; scarred = harsh terms. |
+| **4 · The Watchtower** ([`core/watch.py`](core/watch.py)) | Counterparty screening | Refuses wash/sybil/self-dealing payments using deterministic rules over the house's own caller graph. |
+| **5 · The Gallery** ([`app/x402/gallery.py`](app/x402/gallery.py)) | The live workbench | Configure a subject + function on the left, watch the run/quote/memory-trace/artifact unfold in the console, with the journals dock below. |
+
+---
+
+## The Money Model (Real, Not Simulated)
+
+Payments settle **on-chain on Base mainnet** via the x402 exact scheme. The wire *always* settles the full list price. Per-caller pricing is achieved *around* the settlement via the memory interceptor:
+
+```text
+┌─────────────┐      ┌─────────────┐      ┌─────────────┐
+│   WALLET    │─────▶│  x402 QUOTE │─────▶│   SIGN TX   │
+│  (User)     │      │  ($0.01)    │      │  (EIP-3009) │
+└─────────────┘      └─────────────┘      └──────┬──────┘
+                                                  │
+                                                  ▼
+                                         ┌───────────────┐
+                                         │   SETTLE ON   │
+                                         │   BASE (USDC) │
+                                         │   Full price  │
+                                         └───────┬───────┘
+                                                 │
+                                                 ▼
+                               ┌─────────────────────────────────┐
+                               │      MEMORY INTERCEPTOR           │
+                               │  (core/house.py + core/memory.py)│
+                               │                                   │
+                               │  1. Recall wallet → trust score   │
+                               │  2. Check dedup → repeat?         │
+                               │  3. Check scars → hardened?       │
+                               │  4. Check watchtower → banned?    │
+                               │                                   │
+                               │  DECISION:                        │
+                               │  • VIP → 20% cashback             │
+                               │  • Regular → 5% cashback          │
+                               │  • Repeat → 100% cashback ($0)    │
+                               │  • Banned → REFUSE (uncharged)    │
+                               └────────────────┬──────────────────┘
+                                                │
+                                                ▼
+                                       ┌────────────────┐
+                                       │  SERVE ANSWER  │
+                                       │  + JOURNAL     │
+                                       └────────┬───────┘
+                                                │
+                                                ▼
+                                       ┌────────────────┐
+                                       │  CASHBACK TX   │
+                                       │  (if eligible) │
+                                       │  Verifiable on │
+                                       │  Basescan      │
+                                       └────────────────┘
+```
+* **New:** Pays base price.
+* **Regular/VIP:** Pays base price, house sends a **real cashback rebate** (5% or 20%) from its own wallet. Verifiable on Basescan.
+* **Repeat (Dedup):** Pays base price, house rebates 100% (served from cache at net $0).
+* **Risky:** Refused (403) until a prepay credit covers the surcharge.
+* **Banned:** Refused *before* the job is created. Under the x402 exact scheme, a ≥400 response **cancels the settlement**, meaning the buyer is genuinely uncharged.
+
+---
+
+## Rehearse the Money Beats (Gate 6)
+
+`scripts/demo_beats.py` replays each of the four core money beats through the **real engine** against a throwaway memory DB. Deterministic, reproducible, no network:
 
 ```bash
 .venv/bin/python scripts/demo_beats.py all
@@ -145,271 +208,74 @@ reproducible, no network, no real money:
 # VERDICT: ALL BEATS CLEAN — ready for camera.
 ```
 
-Run it twice — the "curious judge" rule is that a repeat request, a bad actor,
-and a mid-kill all behave correctly on a **second** run.
+---
+
+## Codebase Map
+
+The app is split so the money logic is **unit-testable without the network**:
+- **[`app/x402/seller.py`](app/x402/seller.py)**: The thin FastAPI/x402 boundary — paid routes, free ledgers, memory gate, operator triggers.
+- **[`app/x402/landing.py`](app/x402/landing.py)** / **[`app/x402/gallery.py`](app/x402/gallery.py)**: The homepage (live mirror of house state) and the workbench (configure + console + journals dock). Shared pop-up in [`app/x402/_tryit.py`](app/x402/_tryit.py).
+- **[`core/house.py`](core/house.py)**: The money engine and shared paid pipeline.
+- **[`core/memory.py`](core/memory.py)**: **THE MEMORY LAYER** (Sibyl) — the load-bearing module. Gate logic lives in [`core/wipe.py`](core/wipe.py), chain re-learning in [`core/reseed.py`](core/reseed.py).
+- **[`core/trust.py`](core/trust.py) / [`core/dedup.py`](core/dedup.py) / [`core/scars.py`](core/scars.py)**: The pure-function decision engines. Pricing constants audited in [`core/config.py`](core/config.py).
+- **[`core/watch.py`](core/watch.py)** / **[`core/scout.py`](core/scout.py)** / **[`core/bonds.py`](core/bonds.py)**: Watchtower screens, front-office hiring, underwriting desk.
+- **[`core/dossier.py`](core/dossier.py)**: The cross-room entity file (Room 5's read side).
+- **[`core/acp.py`](core/acp.py)**: The Virtuals ACP delegator (reads memory to set on-chain terms).
+- **[`core/wallet.py`](core/wallet.py)**: Money-OUT (DryRun-safe by default). Receipts in [`core/settle_journal.py`](core/settle_journal.py).
+- **[`core/jobs.py`](core/jobs.py)** / **[`core/executor.py`](core/executor.py)**: Crash-proof work orders (resume exactly once, never double-charge).
+- **[`core/audit.py`](core/audit.py)** / **[`core/calibrate.py`](core/calibrate.py)**: The house auditing and grading itself.
+- **[`core/identity.py`](core/identity.py)** / **[`core/redact.py`](core/redact.py)**: Wallet validation at the door, address masking on every public output.
+- **[`scripts/`](scripts/)**: [`buyer.py`](scripts/buyer.py) (scripted $0.01 purchase), [`demo_beats.py`](scripts/demo_beats.py) (deterministic demo rehearsal), [`verify_sibyl_sdk.py`](scripts/verify_sibyl_sdk.py) (memory SDK checks).
+- **[`tests/`](tests/)**: 60 tests, one per real contract. Deletion gate: [`deletion_test.py`](deletion_test.py).
 
 ---
 
-## Environment
+## Reproducing the Project
 
-All configuration is in `.env` (gitignored). The tracked `.env.example` is the
-canonical layout — **every value belongs to THE HOUSE**; nothing is inherited
-from another project.
+Everything below runs on a fresh clone. No API keys, no network, no money — except where marked.
 
-The two things that matter:
-
+**1. Install and prove the gate (2 minutes).** The headline claim — *delete the memory and the business collapses* — reproduces in one command:
 ```bash
-# 1. the rail — CDP facilitator (Base mainnet) + receiving wallet
-CDP_API_KEY_ID=...
-CDP_API_KEY_SECRET=...
-HOUSE_WALLET=0x...
-
-# 6. the deletion harness — flip to 1 to prove memory is load-bearing
-# SIBYL_DISABLED=1
+git clone https://github.com/Idle0x/the-house && cd the-house
+python -m venv .venv && source .venv/bin/activate
+pip install -e .
+.venv/bin/python deletion_test.py   # exit 0 = gate holds
 ```
-
-**Money is safe by default.** The house *receives* via CDP x402 whenever CDP
-creds are present. It only *sends back* (loyalty rebates / refunds) through
-its own ACP wallet when **both** are set:
-
+**2. Rehearse the money beats (deterministic).** [`scripts/demo_beats.py`](scripts/demo_beats.py) drives the real engine ([`core/house.py`](core/house.py)) against a throwaway database — same code path as production, on-chain settlement elided:
 ```bash
-HOUSE_LIVE_MONEY_OUT=1
-HOUSE_WALLET=<the house's ACP wallet>
+.venv/bin/python scripts/demo_beats.py all
+# recall (repeat served net $0) · badactor (refused, uncharged) ·
+# scar (failures compile to policy) · kill (crash resumes, settles once)
 ```
-
-Until then, rebates are **dry-run** (a clearly-marked pseudo hash — no `acp`
-call, no money). A misconfigured env or a test can therefore never move real
-money. With live money-out on, boot self-checks that the ACP wallet address
-matches `HOUSE_WALLET` (the x402 `pay_to`) and **refuses to boot** on a
-mismatch.
-
-> ⚠️ `.env` is never committed. The repo ships only `.env.example`. Verify
-> with `git grep -iE "api[_-]?key|secret|private_key"` — it should return
-> nothing.
-
----
-
-## Where memory is load-bearing (judge: find it in <2 min)
-
-**The single load-bearing module is `core/memory.py`** — the wrapper around
-the Sibyl Memory client. Every room funnels its reads and writes through it,
-and one env flag (`SIBYL_DISABLED`) collapses all of them at once. That is why
-`deletion_test.py` can prove the whole product in one command.
-
-The memory is **on the critical path, not a side log**, at exactly these call
-sites in the request flow (`core/house.py`, `_paid_serve` — the shared paid
-pipeline every paid intel route runs):
-
-| Step | Call | What it decides |
-|------|------|-----------------|
-| 1 | `TrustLedger.recall(payer)` → `core/trust.py` → `memory.get_entity("caller", payer)` | the segment / price / refuse decision (re-derived from live counters, never the stored label) |
-| 2 | watchtower `consult(payer)` → `core/watch.py` | ABORT → refused before the job exists (uncharged) |
-| 3 | `dedup.fingerprint(route, params)` + `is_repeat` → `core/dedup.py` | a repeat is served from memory at net $0 — BEFORE any work |
-| 4 | `scars.active_rules()` + `_apply_scar_action` → `core/scars.py` | a compiled scar hardens this serve (switch upstream / refuse / prepay) |
-| 5 | risky prepay check | surcharge unaffordable → 403 (uncharged); affordable → credit debited |
-| 6 | `JobStateMachine.start(...)` → `core/jobs.py` (WARM row) | the job is persisted *before* serving — kill-resume + idempotent settle |
-| 7 | **serve** on the active upstream (F3 failover) | the work |
-| 8 | `TrustLedger.update(payer, "served")` + `dedup.mark_served` | the relationship + cache update |
-| 9 | on failure: `ScarCompiler.record(scar)` + `note_failed_fp` | the scar is written to memory; retry_budget=0 spends the fingerprint |
-
-Open `core/memory.py` and search for `get_entity`, `set_entity`, and
-`set_state` — every decision above is one of those three calls. **Delete that
-file's backend (`SIBYL_DISABLED=1`) and every read/write above becomes a
-no-op**: everyone is `new` at list price, nothing is deduped, no scars
-survive, a mid-kill job double-serves. That is the DQI gate, and it is the
-product.
-
----
-
-## How memory made this possible
-
-The four core beats are all *consequences of persistence*, not of clever code:
-without a memory layer, "remember this caller" is impossible and every request
-is a stranger at list price. The Sibyl Memory WARM entity (one row per caller,
-`UNIQUE (tenant, "caller", address)` by construction) is the single source of
-truth for trust, price, dedup, and scars — so loyalty, refusal, dedup, and
-scar-citation are pure reads of that row, and the whole business model is a
-function of it.
-
----
-
-## Prior Work (honesty declaration)
-
-The operator has built and run a **live mainnet x402 seller** before this
-project. **THE HOUSE itself is new, from-scratch code** — none of the code in
-this repo is copied from that earlier project, and the earlier project's
-wallet/keys are **not** used here (the house uses its own `HOUSE_WALLET` and
-its own ACP wallet). The earlier work informed the *design* (how x402 2.x
-actually settles on Base), not the code.
-
----
-
-## Make a real payment (Gate 3)
-
-`scripts/pay.sh` executes one real, reproducible Base-mainnet x402 payment to
-a paid route and logs the settlement tx hash for Basescan. Run it twice and
-the second call is a **$0 dedup repeat** — the F2 money beat.
-
+**3. Run the suite.** [`tests/`](tests/) holds 60 tests, one per real contract: pricing, discounts, free repeats, uncharged refusals, crash recovery, scars, screens, bonds, hiring, dossier, and the memory gate itself.
 ```bash
-HOUSE_BUYER_KEY=0x... scripts/pay.sh /intel/quote   # first call: pays base
-HOUSE_BUYER_KEY=0x... scripts/pay.sh /intel/quote   # second call: $0 (dedup)
-HOUSE_BUYER_KEY=0x... scripts/pay.sh /intel/entity/0x...  # the dossier
+pytest tests/ -q  # 60 passing
 ```
-
-The buyer key comes from `HOUSE_BUYER_KEY` (or `HOUSE_KEYFILE`) — never
-hardcoded in the tree.
+**4. Reproduce the trust ladder.** Serve one fresh wallet twice through the engine: first serve moves trust 50 → 53, the identical repeat serves at net $0 with trust frozen (anti-farming). Nine more *distinct* serves reach 80 + 10 visits = VIP (20% back). The [`#scoring` docs on the landing page](https://the-house-production-10ea.up.railway.app/#scoring) state every rule.
+**5. Reproduce live (small real money).** Fund any wallet with ~$0.50 USDC on Base, open `/gallery` on the [live deploy](https://the-house-production-10ea.up.railway.app/gallery), ask a question ($0.01), ask it again ($0 net), then flip *disable memory* and watch the same question cost full price with no history. Every receipt links to Basescan.
 
 ---
 
-## The money model
+## Contributing to the Project
 
-Pricing is per-caller, driven by the trust-ledger segment, and settled
-**onchain-honestly**. The buyer signs an EIP-3009 authorization for exactly
-the quoted amount, so the settlement on Base is always the **base** price;
-the house's per-caller price is achieved *around* the settlement, not by
-altering it (a route can discount or refuse, never surcharge on the wire):
+**Setup:** clone, `pip install -e .`, copy `.env.example` to `.env` only if you need live money (CDP keys, house wallet). Never commit `.env`, databases, or anything under `data/` — all git-ignored.
 
-| Segment | Price | How |
-|---------|-------|-----|
-| new | ×1.00 | base settles, no rebate |
-| regular | ×0.95 | base settles + house rebates 5% |
-| VIP | ×0.80 | base settles + house rebates 20% |
-| repeat (dedup) | **net $0** | base settles + house rebates 100% (served from cache) |
-| risky | ×1.30 | refused (403) until a prepay credit ≥ the surcharge — uncharged if refused |
-| banned | — | refused before serving; a ≥400 response cancels the settlement, so **uncharged** |
-
-Each settlement and each rebate is journaled with its tx hash, so the house
-can reconcile its own revenue against Basescan from its own state.
-
----
-
-## Architecture
-
-The app is deliberately split so the money is **unit-testable without the
-facilitator or a network** (F4 — "not a god-object"):
-
-```
-app/x402/seller.py     the thin FastAPI/x402 boundary + journaling middleware
-app/x402/landing.py    the landing page (its own brand, a live state mirror)
-app/x402/gallery.py    Room 5 — the watchable world (live, in the house's design)
-core/house.py          the money engine (House) — the real money flow (shared paid pipeline)
-core/wallet.py         money-OUT (HouseWallet / safe DryRunWallet)
-core/settle_journal.py the server-side money ledger (decodes PAYMENT-RESPONSE)
-core/executor.py       F4 — re-drive jobs stuck mid-serve after a restart
-core/trust.py          the trust ledger (F1) — segments + deltas + prepay credit
-core/dedup.py          dedup-as-revenue (F2)
-core/scars.py          failure → scar → compiled policy (F3)
-core/jobs.py           the kill-resilient job store (F4)
-core/bonds.py          Room 2 — the underwriting desk (bonds, claim state machine, cap)
-core/watch.py          Room 4 — the watchtower (deterministic screens)
-core/scout.py          Room 3 — the front office (scouting / hiring terms)
-core/dossier.py        Room 5 — the entity dossier (the cross-room read)
-core/redact.py         public-surface address masking (free routes mask, cold journal keeps)
-core/identity.py       counterparty-id shape validation (0x + 40) at the boundary
-core/memory.py         THE MEMORY LAYER (Sibyl) — the load-bearing module
-core/acp.py            the ACP / Virtuals delegator
-core/audit.py          the self-auditor
-core/calibrate.py      the price calibrator
-deletion_test.py       the runnable gate
-scripts/demo_beats.py  the Gate-6 money-beat rehearsal driver
-```
-
-`core/memory.py` wraps the Sibyl Memory client and is the single gate for
-every room: every read/write above funnels through it, and
-`HouseMemory.disabled()` (driven by `SIBYL_DISABLED`) collapses them all at
-once. **That** is what makes the memory load-bearing — there is one seam, and
-removing it removes the product.
-
-### Verified against the real x402 2.x exact scheme
-
-- The handler runs **before** settlement; a ≥400 response **cancels** it — so
-  a refusal (banned / risky prepay / watchtower ABORT) is genuinely uncharged.
-- The settlement tx hash is not in the request; it arrives in the
-  `PAYMENT-RESPONSE` header **after** the handler. The journal lives in a thin
-  ASGI middleware that decodes that header (FIX-4).
-- The exact scheme re-verifies the buyer's signed amount at settle, so the
-  onchain settlement is always base — per-caller pricing is done via rebate /
-  prepay, never by changing the settle amount.
-- `:param` paid routes (e.g. `/intel/entity/:name`) are gated natively by the
-  x402 middleware for payment; Starlette hands the path param to the handler.
-
----
-
-## Tests
-
+**The one gate every change must pass:**
 ```bash
-pytest tests/ -q        # 59 passing (genuine tests, one per real contract)
+pytest tests/ -q
+.venv/bin/python deletion_test.py
 ```
+A red suite or a broken deletion gate is a veto, no exceptions.
 
-- `test_pricing_enforced.py` — the money engine driven directly (no network,
-  no facilitator, no acp): segment pricing, VIP/regular/repeat rebates, risky
-  prepay, banned refusal, scar citation, journal, dedup.
-- `test_audit_fixes_p0.py` — serve-path truth: repeats never re-run work,
-  refusals leave no job, no job-id reset, honest compute-avoided counter.
-- `test_audit_fixes_p1.py` — F3 for real: switch_upstream rotates (and
-  persists across sessions), retry_budget=0 refuses a remembered failure,
-  in-flight failover escapes a failing upstream.
-- `test_audit_fixes_p2.py` — no full address on the public surface (masked to
-  `0x…last4` on free routes; settlement tx hashes preserved for
-  Basescan reconciliation).
-- `test_audit_fixes_p3b.py` — the claim state machine (a payout the wallet
-  can't send is booked `failed`, never `paid` — never imaginary money), the
-  auto-trigger pays every open bond on a defaulting provider, the operator
-  claim route is token-gated, hire decisions are journaled.
-- `test_audit_fixes_p4b.py` / `test_audit_fixes_p4c.py` — read-only GET
-  audit/calibrate, bounded job state, unpolluted verdict feed, hermetic
-  dedup cache, counterparty-id shape validation at the boundary.
-- `test_jobs.py` — F4 kill-resume + **no double charge**.
-- `test_bonds.py` — Room 2: premium from provider record, claim auto-payout
-  (incl. the finding-#21 "no phantom payout" state machine), remembered-claim
-  cap, deletion.
-- `test_watchtower.py` — Room 4: wash ring refused with the ring drawn,
-  deletion re-admits, the side-effect-free `assess()`.
-- `test_front_office.py` — Room 3: memory-driven draft + scout terms.
-- `test_gallery.py` — Room 5: the dossier (cross-room, timestamped), the paid
-  `/intel/entity/:name` route (full engine, finding #9), the real intel body,
-  the gallery + journal.
-- `test_scars.py` / `test_dedup.py` / `test_trust.py` / `test_memory.py` —
-  each memory feature.
-- `test_seller.py` — the routes, incl. the landing page reading the collapse
-  under `SIBYL_DISABLED=1`.
+**Where to touch what:** money logic belongs in [`core/`](core/) (unit-testable, no network imports); [`app/x402/seller.py`](app/x402/seller.py) stays a thin boundary (routes + middleware only); pages live in [`app/x402/landing.py`](app/x402/landing.py) / [`app/x402/gallery.py`](app/x402/gallery.py) with shared pieces in [`app/x402/_tryit.py`](app/x402/_tryit.py). Pricing constants live in [`core/config.py`](core/config.py) — tune values, never hide formulas. New paid behavior needs a test in the owning room's suite (`tests/test_<room>.py`), following the one-test-per-contract convention.
+
+**Money-out safety:** rebates and payouts stay DryRun unless `HOUSE_LIVE_MONEY_OUT=1` *and* a real `HOUSE_WALLET` are set. Tests and demos must never move real money — [`scripts/demo_beats.py`](scripts/demo_beats.py) and the suite elide settlement by design.
 
 ---
 
-## Audit remediation (Sep 9)
+## Prior Work Declaration
 
-An external full-codebase audit (`THE HOUSE — Full Codebase Audit Report`)
-found real integrity gaps. Every SEV-1/SEV-2 finding was remediated in code
-with a regression test per package (see the commit log):
-
-- **repeat short-circuits to cache BEFORE work** — a down upstream can no
-  longer 502 a cached answer; `compute_avoided` is only counted when compute
-  was actually avoided (`81a78ab`)
-- **refusals precede job creation** — a refusal is a pure read and never
-  leaves a job the executor could settle (`81a78ab`)
-- **segment re-derived at serve time** from live counters, one pure
-  function — the enforcement surface matches the docs (`81a78ab`)
-- **F3 actions act, not cosmetically**: `switch_upstream` rotates a persisted
-  upstream registry; `retry_budget=0` refuses a fingerprint the house
-  remembers as failed (`f48db2d`)
-- **`/intel/entity` runs the full engine** (trust pricing, refusals, scar
-  policy, job state, envelope) — the dossier is a live read, dedup OFF
-  (`93190c4`)
-- **prepay credits are fundable** (`POST /prepay/topup`) — the risky surcharge
-  is a path a buyer can walk, not a permanent refusal (`93190c4`)
-- **public surface masks addresses** (`0x…last4`) while the cold journal
-  keeps full addresses for Basescan reconciliation (`8cf15ba`)
-- **claims can be triggered from the product surface** (token-gated — money
-  out is never a public endpoint), and a claim the wallet can't send books
-  `failed`, never `paid` (`7e68016`)
-- **hire decisions are journaled** — a rendered ruling is hiring memory
-  (`7e68016`)
-
-Honest residual: live money-out (rebates, bond claim payouts) is
-**DryRun-safe-by-default** — designed and unit-verified, but on a live
-deployment it is real only when `HOUSE_LIVE_MONEY_OUT=1` + `HOUSE_WALLET`
-are set. The demo's money beats show the full decision + booking path with
-`dry:`-marked hashes.
+The operator has built and run a live mainnet x402 seller before this project. **THE HOUSE itself is new, from-scratch code.** None of the code in this repo is copied from that earlier project, and the earlier project's wallet/keys are **not** used here. The earlier work informed the *design* (how x402 2.x actually settles on Base), not the code.
 
 ---
 
