@@ -95,6 +95,26 @@ def test_landing_survives_sparse_rows():
     assert st["trust"] == 0 and st["quality"] == 0 and st["callers"] == 1
 
 
+def test_docs_renders_with_manual_and_links(tmp_path, monkeypatch):
+    """/docs serves the formal manual: all ten sections, the trust rules,
+    the on/off table, the API reference — and the landing page links it
+    from the header nav, the hero, and the footer."""
+    from app.x402.seller import build_app
+    monkeypatch.setenv("HOUSE_MEMORY_DB", str(tmp_path / "memory.db"))
+    app = build_app()
+    client = TestClient(app)
+    r = client.get("/docs")
+    assert r.status_code == 200 and "text/html" in r.headers["content-type"]
+    page = r.text
+    for needle in ("Core concepts", "seven functions", "trust system",
+                   "Anatomy of a transaction", "Memory on vs off",
+                   "API reference", "Glossary", "/intel/quote", "PAYMENT-SIGNATURE"):
+        assert needle in page, needle
+    assert "/docs" in client.get("/manifest").json()["free"]
+    landing = client.get("/").text
+    assert 'href="/docs"' in landing and "Read the docs" in landing
+
+
 def test_free_routes_gated_and_startup_prunes(tmp_path, monkeypatch):
     """/house/jobs is free (shows the F4 state machines); /intel/quote is PAID
     (402 without payment). POST /house/compile is capability-gated and turns 3

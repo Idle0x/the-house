@@ -1079,6 +1079,7 @@ _LANDING_HTML = r"""<!doctype html>
       <div class="bar-row bottom">
         <div class="nav">
           <a href="/gallery" class="try-live" data-tip="The workbench: pick a counterparty, run a function, watch memory decide — then it hands you the next step." data-tip-pos="below">try it live</a>
+          <a href="/docs" data-tip="The formal manual: every function, the trust rules, memory on vs off, the full API." data-tip-pos="below">docs</a>
           <a href="/house/ledger" data-tip="Raw JSON: every caller, trust score, dedup state." data-tip-pos="below">ledger</a>
           <a href="/manifest" data-tip="The house's machine-readable service manifest: every endpoint and its price." data-tip-pos="below">manifest</a>
         </div>
@@ -1107,6 +1108,7 @@ _LANDING_HTML = r"""<!doctype html>
             remembering you.</p>
           <div class="cta">
             <a href="/gallery" class="btn primary">Try it live →</a>
+            <a href="/docs" class="btn ghost">Read the docs →</a>
           </div>
           <div class="trust-strip">
             <span>built on <b>Sibyl Memory</b></span>
@@ -1363,7 +1365,7 @@ _LANDING_HTML = r"""<!doctype html>
     <!-- HOW TRUST IS EARNED -->
     <section class="section reveal" id="scoring">
       <h2 data-tip="The exact rules behind every trust number on this page. No hidden formula: what moves a score, what freezes it, and what lowers it.">how trust is earned</h2>
-      <div class="lead">Every wallet starts at <em>50</em>. What happens next is written down here.</div>
+      <div class="lead">Every wallet starts at <em>50</em>. What happens next is written down here — <a href="/docs#trust" style="font-size:15px;">full methodology in the docs →</a>.</div>
       <div class="score-list">
         <div class="score-row"><span class="delta flat">50 start</span><span class="what">Every new wallet begins at trust 50, band <b>new</b>, paying full list price. Strangers until served.</span></div>
         <div class="score-row"><span class="delta up">+3</span><span class="what">Each <b>new question answered</b> and each <b>dossier served</b>. Nine of these from 53 reaches 80 — VIP. Only paid, completed serves count.</span></div>
@@ -1542,6 +1544,7 @@ _LANDING_HTML = r"""<!doctype html>
     <div class="foot-main">
       <span>the-house · base mainnet · x402 exact scheme</span>
       <span class="foot-links">
+        <a href="/docs">Docs</a>
         <a href="https://sibyllabs.org/" target="_blank" rel="noopener">Sibyl Labs</a>
         <a href="https://hack.sibyllabs.org/" target="_blank" rel="noopener">Hackathon</a>
         <a href="https://x.com/sibyl_labs_" target="_blank" rel="noopener">X</a>

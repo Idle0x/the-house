@@ -46,6 +46,7 @@ from core.redact import redact_text, redact_value
 
 from app.x402.landing import build_landing_state, render_landing
 from app.x402.gallery import render_gallery
+from app.x402.docs import render_docs
 from core.bonds import UnderwritingDesk
 from core.acp import ACPDelegator
 from core.config import (BOND_BASE_PREMIUM, INTEL_ENTITY_PRICE,
@@ -625,7 +626,11 @@ def build_app() -> FastAPI:
         ),
     }
 
-    app = FastAPI(title="THE HOUSE", version="0.2.0", lifespan=lifespan)
+    # Note: docs_url=None frees the /docs path for the formal manual
+    # below — the auto Swagger UI is unused anyway (every route here sets
+    # include_in_schema=False).
+    app = FastAPI(title="THE HOUSE", version="0.2.0", lifespan=lifespan,
+                  docs_url=None)
     # app.state aliases — the House owns the real instances; the routes and the
     # tests both reach them through here so they act on the SAME memory.
     app.state.house = house
@@ -661,7 +666,7 @@ def build_app() -> FastAPI:
                      "POST /prepay/topup"],
             "free": ["/house/ledger", "/house/jobs", "/house/audit",
                      "/house/calibrate", "/house/bonds", "/house/watch",
-                     "/house/front", "/house/journal", "/gallery"],
+                     "/house/front", "/house/journal", "/gallery", "/docs"],
             "money": {
                 "settlements": house.journal.count(),
                 "settled_usdc": house.journal.total_usdc(),
@@ -734,6 +739,13 @@ def build_app() -> FastAPI:
             ts=time.strftime("%Y-%m-%d %H:%M UTC", time.gmtime()),
             public_url=os.getenv("HOUSE_PUBLIC_URL", "").strip().rstrip("/"),
         ))
+
+    @app.get("/docs", include_in_schema=False, response_class=HTMLResponse)
+    def route_docs():
+        """The formal manual: concepts, functions, trust, transactions,
+        memory on vs off, history, gate, API reference, reproduction.
+        Static page; the commit token is the only dynamic bit."""
+        return HTMLResponse(render_docs(commit=_git_commit()))
 
     @app.get("/house/journal", include_in_schema=False)
     def route_journal():

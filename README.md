@@ -5,7 +5,8 @@
 > **THE HOUSE is a memory-native x402 service that fixes this.** Loyal wallets pay less, cheaters are refused before a byte is served, and repeat questions are answered free. **Delete the memory, and the entire business model collapses.**
 
 **Live Demo:** [the-house-production-10ea.up.railway.app](https://the-house-production-10ea.up.railway.app/)  
-**Demo Video:** [Watch on YouTube](https://youtu.be/LR9TliraX4s)
+**Demo Video:** [Watch on YouTube](https://youtu.be/1gWCZYmMKRA)  
+**Full Manual:** [DOCUMENTATION.md](DOCUMENTATION.md) · [live /docs](https://the-house-production-10ea.up.railway.app/docs)
 
 ---
 
@@ -270,12 +271,6 @@ A red suite or a broken deletion gate is a veto, no exceptions.
 **Where to touch what:** money logic belongs in [`core/`](core/) (unit-testable, no network imports); [`app/x402/seller.py`](app/x402/seller.py) stays a thin boundary (routes + middleware only); pages live in [`app/x402/landing.py`](app/x402/landing.py) / [`app/x402/gallery.py`](app/x402/gallery.py) with shared pieces in [`app/x402/_tryit.py`](app/x402/_tryit.py). Pricing constants live in [`core/config.py`](core/config.py) — tune values, never hide formulas. New paid behavior needs a test in the owning room's suite (`tests/test_<room>.py`), following the one-test-per-contract convention.
 
 **Money-out safety:** rebates and payouts stay DryRun unless `HOUSE_LIVE_MONEY_OUT=1` *and* a real `HOUSE_WALLET` are set. Tests and demos must never move real money — [`scripts/demo_beats.py`](scripts/demo_beats.py) and the suite elide settlement by design.
-
----
-
-## Prior Work Declaration
-
-The operator has built and run a live mainnet x402 seller before this project. **THE HOUSE itself is new, from-scratch code.** None of the code in this repo is copied from that earlier project, and the earlier project's wallet/keys are **not** used here. The earlier work informed the *design* (how x402 2.x actually settles on Base), not the code.
 
 ---
 

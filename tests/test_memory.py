@@ -32,7 +32,10 @@ def test_wrapper_read_write_contract_and_kind_guard(mem):
     ``funding`` writer, audit SEV-2)."""
     mem.upsert_entity("caller", "0xabc", {"tx_count": 1})
     mem.upsert_entity("caller", "0xabc", {"tx_count": 2, "segment": "regular"})
-    assert mem.get_entity("caller", "0xabc") == {"tx_count": 2, "segment": "regular"}
+    row = mem.get_entity("caller", "0xabc")
+    assert row["tx_count"] == 2 and row["segment"] == "regular"
+    # write-time normalization: score/counter fields are stamped complete
+    assert row["trust_score"] == 50.0 and row["warning_events"] == 0
     assert mem.get_entity("caller", "0xnone") is None
 
     mem.set_reference("pricing", {"new": 1.00, "vip": 0.80})
@@ -42,6 +45,25 @@ def test_wrapper_read_write_contract_and_kind_guard(mem):
     mem.set_state("jobs", {"j1": {"phase": "accepted"}})
     assert mem.get_state("jobs") == {"j1": {"phase": "accepted"}}
     assert mem.get_state("missing") is None
+
+
+def test_sparse_caller_writes_come_back_complete(mem):
+    """Thin writers (watch funding edge: address/funded_by only, or explicit
+    nulls) must never persist a null-field caller row — the production
+    landing 500 came from exactly such a row. Missing OR None score fields
+    are stamped with first-timer defaults; real values pass through."""
+    mem.upsert_entity("caller", "0xthin", {"address": "0xthin", "funded_by": "0xroot"})
+    thin = mem.get_entity("caller", "0xthin")
+    assert thin["trust_score"] == 50.0 and thin["segment"] == "new"
+    assert thin["tx_count"] == 0 and thin["funded_by"] == "0xroot"
+    mem.set_entity("caller", "0xnul", {"address": "0xnul", "trust_score": None,
+                                       "tx_count": None, "segment": None})
+    nul = mem.get_entity("caller", "0xnul")
+    assert nul["trust_score"] == 50.0 and nul["tx_count"] == 0 and nul["segment"] == "new"
+    mem.set_entity("caller", "0xkeep", {"address": "0xkeep", "trust_score": 85.0,
+                                        "tx_count": 12, "segment": "vip"})
+    keep = mem.get_entity("caller", "0xkeep")
+    assert keep["trust_score"] == 85.0 and keep["segment"] == "vip"
 
     mem.set_entity("scar", "S-1", {"route": "/intel"})
     mem.set_entity("scar", "S-2", {"route": "/intel"})

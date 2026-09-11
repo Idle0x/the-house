@@ -33,6 +33,26 @@ from typing import Any, Optional
 from sibyl_memory_client import MemoryClient
 from sibyl_memory_client.exceptions import NotFoundError
 
+from core.config import NEW_CALLER_TRUST
+
+# Write-time normalization: every caller write is stamped with complete
+# score/counter fields (missing OR None → default), mirroring
+# TrustLedger.on_first. Thin writers (e.g. the watchtower's funding edge,
+# which only knows address/funded_by) can no longer create null-field rows
+# that crash aggregate readers — nulls can't exist, not just tolerated.
+_CALLER_DEFAULTS = {
+    "trust_score": NEW_CALLER_TRUST,
+    "segment": "new",
+    "tx_count": 0,
+    "served_count": 0,
+    "dedup_hits": 0,
+    "total_paid_usdc": 0.0,
+    "prepay_usdc": 0.0,
+    "failure_events": 0,
+    "refund_events": 0,
+    "warning_events": 0,
+}
+
 # Journal kinds — KEEP STABLE. E2 (calibrate) scores decisions off
 # extra.kind, and the COLD journal is the audit trail.
 # Taxonomy (audit finding 16): `refund` (trust outcome) and `refunded`
@@ -202,6 +222,11 @@ class HouseMemory:
         return body if isinstance(body, dict) else None
 
     def set_entity(self, kind: str, name: str, body: dict) -> None:
+        body = dict(body or {})
+        if kind == "caller":
+            for k, v in _CALLER_DEFAULTS.items():
+                if body.get(k) is None:
+                    body[k] = v
         self._m.set_entity(kind, name, body)
 
     def upsert_entity(self, kind: str, name: str, body: dict) -> dict:
